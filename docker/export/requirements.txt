@@ -1,0 +1,6 @@
+tensorflow==2.3.0
+gwpy
+seaborn
+tritonclient[all]
+git+https://git.ligo.org/alec.gunny/deepclean-prod.git@tsinfer
+git+https://git.ligo.org/tri.nguyen/bbh_detection_ml.git
