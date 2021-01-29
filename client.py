@@ -1,42 +1,38 @@
 import queue
 import time
-from multiprocessing import Process, Queue, Event
+from multiprocessing import Process, Pipe
 
-from collections import defaultdict
+from inference_process import (
+    DummyDataGenerator,
+    pipe,
+    StreamingInferenceClient
+)
 
-from tsinfer.pipeline import DummyDataGenerator
-from tsinfer.pipeline import Preprocessor
 
+KERNEL_STRIDE = 0.002
 
-
-def postprocessor(batch_start_time, result, error):
-    return time.time() - batch_start_time
-
-q_out = Queue(100)
-targets = {"preprocessor": Preprocessor(
+client = StreamingInferenceClient(
     "localhost:8001",
     "gwe2e",
     1,
-    batch_size=8,
-    kernel_size=1.0,
-    kernel_stride=0.005,
-    fs=4000,
-    profile=True,
-    q_out=q_out,
-    qsize=100,
-    postprocessor=postprocessor
-)}
-
-processes = {}
-for name, x in targets["preprocessor"].inputs.items():
-    q = targets["preprocessor"].q_in[name]
-    targets[name] = DummyDataGenerator(x.shape()[1], q_out=q)
-    processes[name] = Process(target=targets[name], name=name)
-    processes[name].start()
-processes["preprocessor"] = Process(
-    target=targets["preprocessor"], name="preprocessor"
+    "client"
 )
-processes["preprocessor"].start()
+data_generators = []
+for name, x in client.input.items():
+    data_gen = DummyDataGenerator(x.shape()[1:], name, KERNEL_STRIDE)
+    pipe(data_gen, client)
+    data_generators.append(data_gen)
+    data_gen.start()
+
+out_pipes = []
+for output in client.output.items():
+    class Output:
+        name = output.name()
+        _parents = {}
+    out_pipes.append(Output())
+    pipe(client, out_pipes[-1])
+
+client.start()
 
 
 def cleanup():
@@ -54,15 +50,26 @@ def cleanup():
             print(f"Process {process.name} couldn't join")
 
 
+class Empty(Exception):
+    pass
+
+
 def do_a_get(timeout=1e-3):
-    try:
-        result = q_out.get(timeout=timeout)
-    except queue.Empty:
-        raise
+    start_time = time()
+    while time.time() - start_time < timeout:
+        for pipe in output_pipes:
+            if pipe.poll():
+                result = pipe.recv()
+                break
+        else:
+            continue
+        break
+    else:
+        raise Empty
     if isinstance(result, Exception):
         cleanup()
         raise result
-    return result
+    return result.t0
 
 
 warm_up_batches = 50
@@ -72,7 +79,7 @@ for i in range(warm_up_batches):
     try:
         package = do_a_get(timeout=0.5)
         packages += 1
-    except queue.Empty:
+    except Empty:
         continue
 
 if packages == 0:
@@ -84,7 +91,7 @@ average_latency = 0
 for i in range(1000):
     try:
         latency, throughput = do_a_get(timeout=0.5)
-    except queue.Empty:
+    except Empty:
         cleanup()
         raise RuntimeError
 
@@ -95,4 +102,3 @@ for i in range(1000):
     )
     print(msg, end="\r", flush=True)
 cleanup()
-

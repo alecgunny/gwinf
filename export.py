@@ -12,6 +12,7 @@ FS = 4000
 KERNEL_STRIDE = 0.002
 BATCH_SIZE = 1
 
+
 class PostProcessor(torch.nn.Module):
     def forward(self, strain, noise_h, noise_l):
         # TODO: needs to add:
@@ -24,74 +25,59 @@ class PostProcessor(torch.nn.Module):
 
 @tf.keras.utils.register_keras_serializable(name="Snapshotter")
 class Snapshotter(tf.keras.layers.Layer):
-  def __init__(self, size, **kwargs):
-    super().__init__(**kwargs)
-    self.size = size
+    def __init__(self, size, **kwargs):
+        super().__init__(**kwargs)
+        self.size = size
 
-  def build(self, input_shapes):
-    if isinstance(input_shapes, tf.TensorShape):
-        input_shapes = [input_shapes]
+    def build(self, input_shapes):
+        if isinstance(input_shapes, tf.TensorShape):
+            input_shapes = [input_shapes]
 
-    self.snapshots = []
-    for i, shape in enumerate(input_shapes):
-        if shape[0] is None:
-            raise ValueError
-        self.snapshots.append(self.add_weight(
-            name=f"snapshot_{i}",
-            shape=(shape[0], shape[1], self.size),
-            dtype=tf.float32,
-            initializer="zeros",
-            trainable=False
-        ))
-    self.update_size = shape[2]
+        self.snapshots = []
+        for i, shape in enumerate(input_shapes):
+            if shape[0] is None:
+                raise ValueError
+            self.snapshots.append(self.add_weight(
+                name=f"snapshot_{i}",
+                shape=(shape[0], shape[1], self.size),
+                dtype=tf.float32,
+                initializer="zeros",
+                trainable=False
+            ))
+        self.update_size = shape[2]
 
-  def call(self, inputs):
-    if isinstance(inputs, tf.Tensor):
-        inputs = [inputs]
-    outputs = []
-    for x, snapshot in zip(inputs, self.snapshots):
-        update = tf.concat(
-            [snapshot[:, :, self.update_size:], x], axis=-1
-        )
-        snapshot.assign(update)
-        name = x.name.split(":")[0].replace("stream", "snapshot")
-        outputs.append(
-            tf.identity(snapshot, name=name)
-        )
-    return outputs
+    def call(self, inputs):
+        if isinstance(inputs, tf.Tensor):
+            inputs = [inputs]
+        outputs = []
+        for x, snapshot in zip(inputs, self.snapshots):
+            update = tf.concat(
+                [snapshot[:, :, self.update_size:], x], axis=-1
+            )
+            snapshot.assign(update)
+            name = x.name.split(":")[0].replace("stream", "snapshot")
+            outputs.append(
+                tf.identity(snapshot, name=name)
+            )
+        return outputs
 
-  def compute_output_shape(self, input_shapes):
-    if isinstance(input_shapes, tf.TensorShape):
-        input_shapes = [input_shapes]
-    return [tf.TensorShape([shape[0], self.size]) for shape in input_shapes]
+    def compute_output_shape(self, input_shapes):
+        if isinstance(input_shapes, tf.TensorShape):
+            input_shapes = [input_shapes]
+        return [tf.TensorShape([shape[0], self.size]) for shape in input_shapes]
 
-  def get_config(self):
-    config = {"size": self.size}
-    base_config = super().get_config()
-    return dict(list(base_config.items()) + list(config.items()))
+    def get_config(self):
+        config = {"size": self.size}
+        base_config = super().get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
 def main(
     platform="onnx",
     count=1
 ):
-    streaming_inputs = []
-    for stream in ["witness_h", "witness_l", "strain"]:
-        streaming_inputs.append(tf.keras.Input(
-        name=f"{stream}_stream",
-        dtype=tf.float32,
-        shape=(2 if stream == "strain" else 21, int(KERNEL_STRIDE*FS),),
-        batch_size=BATCH_SIZE
-    ))
-    snapshots = Snapshotter(FS)(streaming_inputs)
-    input_model = tf.keras.Model(
-        inputs=streaming_inputs, outputs=snapshots
-    )
-
     deepclean_h = DeepClean(21)
-    deepclean_h.train(False)
     deepclean_l = DeepClean(21)
-    deepclean_l.train(False)
     postprocessor = PostProcessor()
 
     bbh_params = {
@@ -108,9 +94,15 @@ def main(
         "bias_init": None
     }
     bbh = BBHNet((2, FS), bbh_params)
-    bbh.train(False)
 
-    export_kwargs = {}
+    # set everything to eval mode
+    for model in [deepclean_h, deepclean_l, postprocessor, bbh]:
+        model.eval()
+
+    export_kwargs = {
+        "input_shapes": {"witness": (BATCH_SIZE, 21, FS)},
+        "output_names": ["noise"]
+    }
     try:
         platform, precision = platform.split("_")
         if precision == "fp16":
@@ -132,18 +124,8 @@ def main(
         model.config.add_instance_group(count=count)
 
     # export a version of each model
-    deepclean_h_model.export_version(
-        deepclean_h,
-        input_shapes={"witness": (BATCH_SIZE, 21, FS)},
-        output_names=["noise"],
-        **export_kwargs
-    )
-    deepclean_l_model.export_version(
-        deepclean_l,
-        input_shapes={"witness": (BATCH_SIZE, 21, FS)},
-        output_names=["noise"],
-        **export_kwargs
-    )
+    deepclean_h_model.export_version(deepclean_h, **export_kwargs)
+    deepclean_l_model.export_version(deepclean_l, **export_kwargs)
     pp_model.export_version(
         postprocessor,
         input_shapes={
@@ -161,6 +143,21 @@ def main(
     # hardcoding some of the TF stuff until I have
     # support, but this will allow me to use the
     # native ensemble tools
+    # build the model itself
+    streaming_inputs = []
+    for stream in ["witness_h", "witness_l", "strain"]:
+        streaming_inputs.append(tf.keras.Input(
+            name=f"{stream}_stream",
+            dtype=tf.float32,
+            shape=(2 if stream == "strain" else 21, int(KERNEL_STRIDE * FS),),
+            batch_size=BATCH_SIZE
+        ))
+    snapshots = Snapshotter(FS)(streaming_inputs)
+    input_model = tf.keras.Model(
+        inputs=streaming_inputs, outputs=snapshots
+    )
+
+    # build the model config
     from tritonclient.grpc import model_config_pb2 as model_config
     tf_model_name = "snapshotter"
     config = model_config.ModelConfig(
@@ -178,12 +175,16 @@ def main(
             data_type=model_config.TYPE_FP32
         ))
     for n, output in enumerate(input_model.outputs):
+        # TODO: how do we standardize output name
+        # conventions?
         postfix = "" if n == 0 else f"_{n}"
         config.output.append(model_config.ModelOutput(
             name="snapshotter" + postfix,
             dims=tuple(output.shape),
             data_type=model_config.TYPE_FP32
         ))
+
+    # save everything
     tf.io.gfile.makedirs(repo.path + f"/{tf_model_name}/1")
     input_model.save(repo.path + f"/{tf_model_name}/1/model.savedmodel")
     with open(repo.path + f"/{tf_model_name}/config.pbtxt", "w") as f:
@@ -196,17 +197,17 @@ def main(
     ensemble = repo.create_model("gwe2e", platform=PlatformName.ENSEMBLE)
     ensemble.config.add_input(
         "witness_h",
-        shape=(BATCH_SIZE, 21, int(FS*KERNEL_STRIDE)),
+        shape=(BATCH_SIZE, 21, int(FS * KERNEL_STRIDE)),
         dtype="float32"
     )
     ensemble.config.add_input(
         "witness_l",
-        shape=(BATCH_SIZE, 21, int(FS*KERNEL_STRIDE)),
+        shape=(BATCH_SIZE, 21, int(FS * KERNEL_STRIDE)),
         dtype="float32"
     )
     ensemble.config.add_input(
         "strain",
-        shape=(BATCH_SIZE, 2, int(FS*KERNEL_STRIDE)),
+        shape=(BATCH_SIZE, 2, int(FS * KERNEL_STRIDE)),
         dtype="float32"
     )
     ensemble.config.add_output(
@@ -268,4 +269,3 @@ if __name__ == "__main__":
     )
     flags = parser.parse_args()
     main(**vars(flags))
-

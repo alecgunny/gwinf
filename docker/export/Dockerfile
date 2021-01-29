@@ -17,4 +17,4 @@ RUN pip install nvidia-pyindex && \
 
 ADD export.py export.py
 ENTRYPOINT ["python", "export.py"]
-CMD ["--count", "1", "--platform", "trt_fp16"]
+CMD [""]
