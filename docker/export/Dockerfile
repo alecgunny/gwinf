@@ -2,6 +2,7 @@ ARG tag=20.12
 ARG dev=false
 FROM nvcr.io/nvidia/pytorch:${tag}-py3 AS base
 ADD docker/export/requirements.txt requirements.txt
+# TODO: add in symlinking for TF libs
 
 FROM base AS false
 RUN echo "git+https://github.com/alecgunny/exportlib.git" >> requirements.txt

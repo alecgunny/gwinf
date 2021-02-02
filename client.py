@@ -1,6 +1,4 @@
-import queue
 import time
-from multiprocessing import Process, Pipe
 
 from inference_process import (
     DummyDataGenerator,
@@ -12,10 +10,7 @@ from inference_process import (
 KERNEL_STRIDE = 0.002
 
 client = StreamingInferenceClient(
-    "localhost:8001",
-    "gwe2e",
-    1,
-    "client"
+    "localhost:8001", "gwe2e", 1, "client"
 )
 data_generators = []
 for name, x in client.input.items():
@@ -36,11 +31,10 @@ client.start()
 
 
 def cleanup():
-    for target in targets.values():
-        target.stop()
-    for process in processes.values():
-        if process.is_alive():
-          process.join(0.1)
+    for process in data_generators + [client]:
+        process.stop()
+        process.join(0.5)
+
         try:
             process.close()
         except ValueError:
@@ -57,9 +51,9 @@ class Empty(Exception):
 def do_a_get(timeout=1e-3):
     start_time = time()
     while time.time() - start_time < timeout:
-        for pipe in output_pipes:
-            if pipe.poll():
-                result = pipe.recv()
+        for p in out_pipes:
+            if p.poll():
+                result = p.recv()
                 break
         else:
             continue
@@ -95,10 +89,10 @@ for i in range(1000):
         cleanup()
         raise RuntimeError
 
-    average_latency += (latency - average_latency) / (i+1)
+    average_latency += (latency - average_latency) / (i + 1)
 
     msg = "Average latency: {} us, Average Throughput: {} frames/s".format(
-        int(average_latency * 10**6), 8*throughput
+        int(average_latency * 10**6), 8 * throughput
     )
     print(msg, end="\r", flush=True)
 cleanup()
