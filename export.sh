@@ -18,5 +18,5 @@ docker run --rm -it \
         --count $COUNT --platform onnx
 
 touch $MODELREPO/gwe2e/1/model.empty
-gsutil cp -r $MODELREPO gs://gwe2e/repo
+gsutil cp -r $MODELREPO/* gs://gwe2e/repo/
 gsutil ls gs://gwe2e/repo
