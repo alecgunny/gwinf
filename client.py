@@ -85,7 +85,7 @@ def main(
 
     out_pipes = []
     for output in client.outputs:
-        out_pipes.append(Output(output.name))
+        out_pipes.append(Output(output.name()))
         pipe(client, out_pipes[-1])
 
     for process in processes:
@@ -133,7 +133,7 @@ def main(
     cleanup(processes)
 
     client = triton.InferenceServerClient(url)
-    inference_stats = client.get_inference_statistics(url).model_stats
+    inference_stats = client.get_inference_statistics().model_stats
     for stat in inference_stats:
         name = stat.name.upper()
         for field, data in stat.inference_stats.ListFields():
