@@ -21,17 +21,16 @@ spec:
         env:
         - name: EXTRA_NV_PATHS
           value: /usr/local/nvidia/lib64:/usr/local/nvidia/bin
+        - name: MODEL_REPOISTORY
+          value: gs://gwe2e/repo
         command:
         - /bin/bash
         args:
         - -c
-        - LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$EXTRA_NV_PATHS" bin/tritonserver --model-repository /repo
+        - LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$EXTRA_NV_PATHS" bin/tritonserver --model-repository $MODEL_REPOSITORY
         resources:
           limits:
             nvidia.com/gpu: 1
-        volumeMounts:
-        - mountPath: /repo
-          name: model-repository
         ports:
         - containerPort: 8000
           protocol: TCP
@@ -39,10 +38,5 @@ spec:
           protocol: TCP
         - containerPort: 8002
           protocol: TCP
-      volumes:
-      - name: model-repository
-        gcePersistentDisk:
-          pdName: model-repository
-          fsType: ext4
       nodeSelector:
         cloud.google.com/gke-accelerator: nvidia-tesla-t4
