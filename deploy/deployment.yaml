@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tritonserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tritonserver
+  template:
+    metadata:
+      labels:
+        app: tritonserver
+    spec:
+      securityContext:
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: tritonserver
+        image: nvcr.io/nvidia/tritonserver:20.11-py3
+        env:
+        - name: EXTRA_NV_PATHS
+          value: /usr/local/nvidia/lib64:/usr/local/nvidia/bin
+        command:
+        - /bin/bash
+        args:
+        - -c
+        - LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$EXTRA_NV_PATHS" bin/tritonserver --model-repository /repo
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+        volumeMounts:
+        - mountPath: /repo
+          name: model-repository
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+        - containerPort: 8001
+          protocol: TCP
+        - containerPort: 8002
+          protocol: TCP
+      volumes:
+      - name: model-repository
+        gcePersistentDisk:
+          pdName: model-repository
+          fsType: ext4
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-tesla-t4
