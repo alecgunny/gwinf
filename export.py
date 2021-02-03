@@ -8,8 +8,6 @@ from exportlib.model_repository import ModelRepository
 from exportlib.platform import PlatformName
 
 
-FS = 4000
-KERNEL_STRIDE = 0.002
 BATCH_SIZE = 1
 
 
@@ -73,9 +71,12 @@ class Snapshotter(tf.keras.layers.Layer):
 
 
 def main(
-    platform="onnx",
-    count=1
+    platform: str = "onnx",
+    count: int = 1,
+    kernel_stride: float = 0.002,
+    fs: int = 4000
 ):
+    # TODO: make these configurable
     deepclean_h = DeepClean(21)
     deepclean_l = DeepClean(21)
     postprocessor = PostProcessor()
@@ -93,14 +94,14 @@ def main(
         "weight_init": None,
         "bias_init": None
     }
-    bbh = BBHNet((2, FS), bbh_params)
+    bbh = BBHNet((2, fs), bbh_params)
 
     # set everything to eval mode
     for model in [deepclean_h, deepclean_l, postprocessor, bbh]:
         model.eval()
 
     export_kwargs = {
-        "input_shapes": {"witness": (BATCH_SIZE, 21, FS)},
+        "input_shapes": {"witness": (BATCH_SIZE, 21, fs)},
         "output_names": ["noise"]
     }
     try:
@@ -129,30 +130,31 @@ def main(
     pp_model.export_version(
         postprocessor,
         input_shapes={
-            "strain": (BATCH_SIZE, 2, FS),
-            "noise_h": (BATCH_SIZE, FS),
-            "noise_l": (BATCH_SIZE, FS)
+            "strain": (BATCH_SIZE, 2, fs),
+            "noise_h": (BATCH_SIZE, fs),
+            "noise_l": (BATCH_SIZE, fs)
         },
         output_names=["cleaned"]
     )
     bbh_model.export_version(
         bbh,
-        input_shapes={"strain": (BATCH_SIZE, 2, FS)},
+        input_shapes={"strain": (BATCH_SIZE, 2, fs)},
         output_names=["prob"]
     )
     # hardcoding some of the TF stuff until I have
     # support, but this will allow me to use the
     # native ensemble tools
     # build the model itself
+    update_size = int(kernel_stride * fs)
     streaming_inputs = []
     for stream in ["witness_h", "witness_l", "strain"]:
         streaming_inputs.append(tf.keras.Input(
             name=f"{stream}_stream",
             dtype=tf.float32,
-            shape=(2 if stream == "strain" else 21, int(KERNEL_STRIDE * FS),),
+            shape=(2 if stream == "strain" else 21, update_size,),
             batch_size=BATCH_SIZE
         ))
-    snapshots = Snapshotter(FS)(streaming_inputs)
+    snapshots = Snapshotter(fs)(streaming_inputs)
     input_model = tf.keras.Model(
         inputs=streaming_inputs, outputs=snapshots
     )
@@ -197,27 +199,27 @@ def main(
     ensemble = repo.create_model("gwe2e", platform=PlatformName.ENSEMBLE)
     ensemble.config.add_input(
         "witness_h",
-        shape=(BATCH_SIZE, 21, int(FS * KERNEL_STRIDE)),
+        shape=(BATCH_SIZE, 21, update_size),
         dtype="float32"
     )
     ensemble.config.add_input(
         "witness_l",
-        shape=(BATCH_SIZE, 21, int(FS * KERNEL_STRIDE)),
+        shape=(BATCH_SIZE, 21, update_size),
         dtype="float32"
     )
     ensemble.config.add_input(
         "strain",
-        shape=(BATCH_SIZE, 2, int(FS * KERNEL_STRIDE)),
+        shape=(BATCH_SIZE, 2, update_size),
         dtype="float32"
     )
     ensemble.config.add_output(
         "noise_h",
-        shape=(BATCH_SIZE, FS),
+        shape=(BATCH_SIZE, fs),
         dtype="float32"
     )
     ensemble.config.add_output(
         "noise_l",
-        shape=(BATCH_SIZE, FS),
+        shape=(BATCH_SIZE, fs),
         dtype="float32"
     )
     ensemble.config.add_output(
@@ -266,6 +268,21 @@ if __name__ == "__main__":
         type=int,
         default=1,
         help="Number of model instances to place on GPU"
+    )
+    parser.add_argument(
+        "--kernel-stride",
+        type=float,
+        default=0.002,
+        help="Time between frame snapshots"
+    )
+    # TODO: generalize by making type float,
+    # including kernel-size, and mapping
+    # to int after multiplying
+    parser.add_argument(
+        "--fs",
+        type=int,
+        default=4000,
+        help="Samples in a frame"
     )
     flags = parser.parse_args()
     main(**vars(flags))

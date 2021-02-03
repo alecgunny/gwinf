@@ -17,6 +17,8 @@ docker run --rm -it \
     gwe2e/export:$TAG-dev \
         --count $COUNT --platform onnx
 
+# touch empty file in ensemble model version
+# dir so that gsutil knows to copy it
 touch $MODELREPO/gwe2e/1/model.empty
 gsutil cp -r $MODELREPO/* gs://gwe2e/repo/
 gsutil ls gs://gwe2e/repo
