@@ -16,3 +16,6 @@ docker run --rm -it \
     -u $(id -u):$(id -g) \
     gwe2e/export:$TAG-dev \
         --count $COUNT --platform onnx
+
+touch $MODELREPO/gwe2e/1/model.empty
+gsutil cp MODELREPO gs://gwe2e/repo
