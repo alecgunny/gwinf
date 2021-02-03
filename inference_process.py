@@ -1,8 +1,10 @@
 import random
+import sys
 import time
 import typing
 from multiprocessing import Event, Pipe, Process, Queue
 from multiprocessing.connection import Connection
+from tblib import pickling_support
 
 import attr
 import numpy as np
@@ -13,7 +15,7 @@ from tritonclient.grpc import model_config_pb2 as model_config
 
 @attr.s(auto_attribs=True)
 class Relative:
-    name: "InferenceProcess"
+    process: "InferenceProcess"
     conn: Connection
 
 
@@ -23,10 +25,18 @@ class Package:
     t0: float
 
 
+@pickling_support.install
+class ExceptionWrapper(Exception):
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+        _, __, self.tb = sys.exc_info()
+
+    def reraise(self) -> None:
+        raise self.exc.with_traceback(self.tb)
+
+
 class InferenceProcess(Process):
     def __init__(self, name: str) -> None:
-        self.name = name
-
         self._parents = {}
         self._children = {}
 
@@ -34,14 +44,20 @@ class InferenceProcess(Process):
         self._stop_event = Event()
 
         self._emergecy_q = Queue()
-        super().__init__()
+        super().__init__(name=name)
 
     def add_parent(self, parent: Relative):
-        name = getattr(parent, "name", None)
+        if parent.process is None:
+            name = None
+        else:
+            name = parent.process.name
         self._parents[name] = parent.conn
 
     def add_child(self, child: Relative):
-        name = getattr(child, "name", None)
+        if child.process is None:
+            name = None
+        else:
+            name = child.process.name
         self._children[name] = child.conn
 
     @property
@@ -52,6 +68,8 @@ class InferenceProcess(Process):
         self._stop_event.set()
 
     def _break_glass(self, exception):
+        exception = ExceptionWrapper(exception)
+
         self.stop()
         if len(self._children) == 0:
             self._emergency_q.put(exception)
@@ -98,6 +116,8 @@ class InferenceProcess(Process):
                         ", ".join(unfinished)
                     )
                 )
+        elif not ready_objs:
+            return None
         return ready_objs
 
     def _main_loop(self):
@@ -110,15 +130,6 @@ class InferenceProcess(Process):
     def do_stuff_with_data(self, objs):
         raise NotImplementedError
 
-    def __getstate__(self):
-        # capture what is normally pickled
-        state = self.__dict__.copy()
-
-        # remove unpicklable/problematic variables 
-        state['_parents'] = None
-        state['_children'] = None
-        return state
-
 
 class DummyDataGenerator(InferenceProcess):
     def __init__(
@@ -130,7 +141,7 @@ class DummyDataGenerator(InferenceProcess):
         self.shape = shape
         self.kernel_stride = kernel_stride
         self.last_time = time.time()
-        super().__init__(shape)
+        super().__init__(name)
 
     def _get_data(self):
         if (
@@ -193,8 +204,14 @@ class StreamingInferenceClient(InferenceProcess):
         ]
 
     def add_parent(self, parent:  Relative):
-        name = getattr(parent, "name", None)
-        if name not in self.inputs:
+        current_keys = set(self._parents)
+        super().add_parent(parent)
+
+        # check if new key is valid, otherwise
+        # get rid of it and raise error
+        new_key = (set(self._parents) - current_keys).pop()
+        if new_key not in self.inputs:
+            self._parents.pop(new_key)
             raise ValueError(
                 "Tried to add data source named {} "
                 "to inference client expecting "
@@ -202,11 +219,13 @@ class StreamingInferenceClient(InferenceProcess):
                     name, ", ".join(self.inputs.keys())
                 )
             )
-        super().add_parent(parent)
 
     def add_child(self, child: Relative):
-        name = getattr(child, "name", None)
-        if name not in [x.name() for x in self.outputs]:
+        current_keys = set(self._children)
+        super().add_child(child)
+
+        new_key = (set(self._children) - current_keys).pop()
+        if new_key not in [x.name() for x in self.outputs]:
             raise ValueError(
                 "Tried to add output named {} "
                 "to inference client expecting "
@@ -214,17 +233,25 @@ class StreamingInferenceClient(InferenceProcess):
                     name, ", ".join(self.inputs.keys())
                 )
             )
-        super().add_child(child)
 
     def _callback(self, result, error):
+        if error is not None:
+            for name, conn in self._children.items():
+                exc = ExceptionWrapper(
+                    RuntimeError(error)
+                )
+                conn.send(exc)
+            self.stop()
+            return
+
         id = int(result.get_response().id)
         t0 = self._start_times.pop(id)
         end_time = time.time()
         latency = end_time - t0
         throughput = id / (end_time - self._start_time)
-        for name, conn in self._children:
+        for name, conn in self._children.items():
             x = result.as_numpy(name)
-            conn.send(Package(x, (latency, thoughput)))
+            conn.send(Package(x, (latency, throughput)))
 
     def _main_loop(self):
         missing_sources = set(self.inputs) - set(self._parents)
@@ -246,32 +273,35 @@ class StreamingInferenceClient(InferenceProcess):
             )
 
         with triton.InferenceServerClient(url=self.url) as self.client:
-            client.start_stream(callback=self._callback, stream_timeout=60)
+            self.client.start_stream(callback=self._callback, stream_timeout=60)
             self._start_time = time.time()
             self._request_id = 0
             super()._main_loop()
 
-        def do_stuff_with_data(objs):
-            t0 = 0
-            for name, package in objs.items():
-                inputs[name].set_data_from_numpy(package.x)
-                start_time += package.t0
-            t0 /= len(objs)
+    def do_stuff_with_data(self, objs):
+        t0 = 0
+        assert len(objs) == len(self.inputs)
+        for name, package in objs.items():
+            self.inputs[name].set_data_from_numpy(package.x[None])
+            t0 += package.t0
+        t0 /= len(objs)
 
-            # request_id = "".join(random.choices(string.ascii_letters, k=16))
-            self._request_id += 1
-            self._start_times[self._request_id+0] = t0
+        # request_id = "".join(random.choices(string.ascii_letters, k=16))
+        self._request_id += 1
+        self._start_times[self._request_id+0] = t0
 
-            self.client.async_stream_infer(
-                self.model_name,
-                inputs=list(self.inputs.values()),
-                outputs=self.outputs,
-                request_id=str(request_id),
-                sequence_id=1001
-            )
+        self.client.async_stream_infer(
+            self.model_name,
+            inputs=list(self.inputs.values()),
+            outputs=self.outputs,
+            request_id=str(self._request_id),
+            sequence_start=self._request_id==1,
+            sequence_id=1001
+        )
 
 
 def pipe(parent: InferenceProcess, child: InferenceProcess):
     parent_conn, child_conn = Pipe()
     parent.add_child(Relative(child, child_conn))
     child.add_parent(Relative(parent, parent_conn))
+

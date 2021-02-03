@@ -1,4 +1,5 @@
 tensorflow==2.3.0
+tblib
 gwpy
 seaborn
 tritonclient[all]

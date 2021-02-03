@@ -15,4 +15,4 @@ docker run --rm -it \
     --gpus all \
     -u $(id -u):$(id -g) \
     gwe2e/export:$TAG-dev \
-        --count $COUNT --platform trt_fp16
+        --count $COUNT --platform onnx

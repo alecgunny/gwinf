@@ -2,6 +2,7 @@ import time
 
 from inference_process import (
     DummyDataGenerator,
+    ExceptionWrapper,
     pipe,
     StreamingInferenceClient
 )
@@ -13,21 +14,25 @@ client = StreamingInferenceClient(
     "localhost:8001", "gwe2e", 1, "client"
 )
 data_generators = []
-for name, x in client.input.items():
+for name, x in client.inputs.items():
     data_gen = DummyDataGenerator(x.shape()[1:], name, KERNEL_STRIDE)
     pipe(data_gen, client)
     data_generators.append(data_gen)
-    data_gen.start()
 
 out_pipes = []
-for output in client.output.items():
+for output in client.outputs:
     class Output:
         name = output.name()
         _parents = {}
+        def add_parent(self, relative):
+            self._parents[relative.process.name] = relative.conn
+
     out_pipes.append(Output())
     pipe(client, out_pipes[-1])
 
 client.start()
+for gen in data_generators:
+    gen.start()
 
 
 def cleanup():
@@ -49,20 +54,21 @@ class Empty(Exception):
 
 
 def do_a_get(timeout=1e-3):
-    start_time = time()
+    start_time = time.time()
     while time.time() - start_time < timeout:
         for p in out_pipes:
-            if p.poll():
-                result = p.recv()
+            conn = p._parents["client"]
+            if conn.poll():
+                result = conn.recv()
                 break
         else:
             continue
         break
     else:
         raise Empty
-    if isinstance(result, Exception):
+    if isinstance(result, ExceptionWrapper):
         cleanup()
-        raise result
+        raise result.reraise()
     return result.t0
 
 
@@ -82,7 +88,7 @@ if packages == 0:
 print(f"Warmed up with {packages}")
 
 average_latency = 0
-for i in range(1000):
+for i in range(10000):
     try:
         latency, throughput = do_a_get(timeout=0.5)
     except Empty:
@@ -92,7 +98,10 @@ for i in range(1000):
     average_latency += (latency - average_latency) / (i + 1)
 
     msg = "Average latency: {} us, Average Throughput: {} frames/s".format(
-        int(average_latency * 10**6), 8 * throughput
+        int(average_latency * 10**6), throughput
     )
-    print(msg, end="\r", flush=True)
+    if i < 9999:
+        print(msg, end="\r", flush=True)
+    else:
+        print(msg)
 cleanup()
