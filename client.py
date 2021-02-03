@@ -1,4 +1,8 @@
+import argparse
+import logging
 import time
+
+from tritonclient import grpc as triton
 
 from inference_process import (
     DummyDataGenerator,
@@ -8,35 +12,30 @@ from inference_process import (
 )
 
 
-KERNEL_STRIDE = 0.002
-
-client = StreamingInferenceClient(
-    "localhost:8001", "gwe2e", 1, "client"
+log = logging.getLogger()
+console = logging.StreamHandler()
+console.setFormatter(
+    logging.Formatter("%(asctime)s\t%(message)s")
 )
-data_generators = []
-for name, x in client.inputs.items():
-    data_gen = DummyDataGenerator(x.shape()[1:], name, KERNEL_STRIDE)
-    pipe(data_gen, client)
-    data_generators.append(data_gen)
-
-out_pipes = []
-for output in client.outputs:
-    class Output:
-        name = output.name()
-        _parents = {}
-        def add_parent(self, relative):
-            self._parents[relative.process.name] = relative.conn
-
-    out_pipes.append(Output())
-    pipe(client, out_pipes[-1])
-
-client.start()
-for gen in data_generators:
-    gen.start()
+log.addHandler(console)
+log.setLevel(logging.INFO)
 
 
-def cleanup():
-    for process in data_generators + [client]:
+class Empty(Exception):
+    pass
+
+
+class Output:
+    def __init__(self, name: str):
+        self.name = name
+        self._parents = {}
+
+    def add_parent(self, relative):
+        self._parents[relative.process.name] = relative.conn
+
+
+def cleanup(processes):
+    for process in processes:
         process.stop()
         process.join(0.5)
 
@@ -49,14 +48,10 @@ def cleanup():
             print(f"Process {process.name} couldn't join")
 
 
-class Empty(Exception):
-    pass
-
-
-def do_a_get(timeout=1e-3):
+def get_output(pipes, timeout=1e-3):
     start_time = time.time()
     while time.time() - start_time < timeout:
-        for p in out_pipes:
+        for p in pipes:
             conn = p._parents["client"]
             if conn.poll():
                 result = conn.recv()
@@ -66,42 +61,121 @@ def do_a_get(timeout=1e-3):
         break
     else:
         raise Empty
-    if isinstance(result, ExceptionWrapper):
-        cleanup()
-        raise result.reraise()
-    return result.t0
+    return result
 
 
-warm_up_batches = 50
-packages = 0
-print(f"Warming up for {warm_up_batches} batches...")
-for i in range(warm_up_batches):
-    try:
-        package = do_a_get(timeout=0.5)
-        packages += 1
-    except Empty:
-        continue
-
-if packages == 0:
-    cleanup()
-    raise RuntimeError("Nothing ever showed up!")
-print(f"Warmed up with {packages}")
-
-average_latency = 0
-for i in range(10000):
-    try:
-        latency, throughput = do_a_get(timeout=0.5)
-    except Empty:
-        cleanup()
-        raise RuntimeError
-
-    average_latency += (latency - average_latency) / (i + 1)
-
-    msg = "Average latency: {} us, Average Throughput: {} frames/s".format(
-        int(average_latency * 10**6), throughput
+def main(
+    kernel_stride: float,
+    url: str,
+    num_iterations: int = 10000,
+    num_warm_ups: int = 50,
+    use_dummy=True
+):
+    client = StreamingInferenceClient(
+        url, "gwe2e", 1, "client"
     )
-    if i < 9999:
-        print(msg, end="\r", flush=True)
-    else:
-        print(msg)
-cleanup()
+    processes = [client]
+    for name, x in client.inputs.items():
+        if use_dummy:
+            data_gen = DummyDataGenerator(
+                x.shape()[1:], name, kernel_stride
+            )
+        pipe(data_gen, client)
+        processes.append(data_gen)
+
+    out_pipes = []
+    for output in client.outputs:
+        out_pipes.append(Output(output.name))
+        pipe(client, out_pipes[-1])
+
+    for process in processes:
+        process.start()
+
+    packages = 0
+    log.info(f"Warming up for {num_warm_ups} batches")
+    for i in range(num_warm_ups):
+        try:
+            package = get_output(out_pipes, timeout=0.1)
+            packages += 1
+        except Empty:
+            continue
+        if isinstance(package, ExceptionWrapper):
+            cleanup(processes)
+            raise package.reraise()
+
+    if packages == 0:
+        cleanup(processes)
+        raise RuntimeError("Nothing ever showed up!")
+    log.info(f"Warmed up with {packages}")
+
+    average_latency = 0
+    for i in range(10000):
+        try:
+            package = get_output(out_pipes, timeout=0.1)
+        except Empty:
+            cleanup(processes)
+            raise RuntimeError
+
+        if isinstance(package, ExceptionWrapper):
+            cleanup(processes)
+            raise package.reraise()
+        latency, throughput = package.t0
+
+        average_latency += (latency - average_latency) / (i + 1)
+
+        msg = "Average latency: {} us, Average Throughput: {} frames/s".format(
+            int(average_latency * 10**6), throughput
+        )
+        if i < 9999:
+            print(msg, end="\r", flush=True)
+        else:
+            log.info(msg)
+    cleanup(processes)
+
+    client = triton.InferenceServerClient(url)
+    inference_stats = client.get_inference_statistics(url).model_stats
+    for stat in inference_stats:
+        name = stat.name.upper()
+        for field, data in stat.inference_stats.ListFields():
+            if field.name == "fail":
+                continue
+            field = field.name
+            time = int(data.ns / data.count / 1000)
+            msg = f"{name}\tAverage {field} time: {time}"
+            logging.info(msg)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--kernel-stride",
+        type=float,
+        required=True,
+        help="Time between frame snapshosts"
+    )
+    parser.add_argument(
+        "--url",
+        type=str,
+        default="localhost:8001",
+        help="Server URL"
+    )
+    parser.add_argument(
+        "--num-iterations",
+        type=int,
+        default=10000,
+        help="Number of requests to get for profiling"
+    )
+    parser.add_argument(
+        "--num-warm-ups",
+        type=int,
+        default=50,
+        help="Number of warm up requests"
+    )
+    parser.add_argument(
+        "--use-dummy",
+        action="store_true",
+        help="Whether to use dummy data generators"
+    )
+
+    flags = parser.parse_args()
+    main(**vars(flags))

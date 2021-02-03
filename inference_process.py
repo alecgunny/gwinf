@@ -8,9 +8,7 @@ from tblib import pickling_support
 
 import attr
 import numpy as np
-
 from tritonclient import grpc as triton
-from tritonclient.grpc import model_config_pb2 as model_config
 
 
 @attr.s(auto_attribs=True)
@@ -68,7 +66,8 @@ class InferenceProcess(Process):
         self._stop_event.set()
 
     def _break_glass(self, exception):
-        exception = ExceptionWrapper(exception)
+        if not isinstance(exception, ExceptionWrapper):
+            exception = ExceptionWrapper(exception)
 
         self.stop()
         if len(self._children) == 0:
@@ -145,8 +144,8 @@ class DummyDataGenerator(InferenceProcess):
 
     def _get_data(self):
         if (
-            self.kernel_stride is not None
-            and time.time() - self.last_time < self.kernel_stride
+            self.kernel_stride is not None and
+            time.time() - self.last_time < self.kernel_stride
         ):
             return
         x = np.random.randn(*self.shape).astype(np.float32)
@@ -203,7 +202,7 @@ class StreamingInferenceClient(InferenceProcess):
             for output in model_metadata.outputs
         ]
 
-    def add_parent(self, parent:  Relative):
+    def add_parent(self, parent: Relative):
         current_keys = set(self._parents)
         super().add_parent(parent)
 
@@ -216,7 +215,7 @@ class StreamingInferenceClient(InferenceProcess):
                 "Tried to add data source named {} "
                 "to inference client expecting "
                 "sources {}".format(
-                    name, ", ".join(self.inputs.keys())
+                    new_key, ", ".join(self.inputs.keys())
                 )
             )
 
@@ -230,7 +229,7 @@ class StreamingInferenceClient(InferenceProcess):
                 "Tried to add output named {} "
                 "to inference client expecting "
                 "outputs {}".format(
-                    name, ", ".join(self.inputs.keys())
+                    new_key, ", ".join(self.inputs.keys())
                 )
             )
 
@@ -288,14 +287,14 @@ class StreamingInferenceClient(InferenceProcess):
 
         # request_id = "".join(random.choices(string.ascii_letters, k=16))
         self._request_id += 1
-        self._start_times[self._request_id+0] = t0
+        self._start_times[self._request_id + 0] = t0
 
         self.client.async_stream_infer(
             self.model_name,
             inputs=list(self.inputs.values()),
             outputs=self.outputs,
             request_id=str(self._request_id),
-            sequence_start=self._request_id==1,
+            sequence_start=self._request_id == 1,
             sequence_id=1001
         )
 
@@ -304,4 +303,3 @@ def pipe(parent: InferenceProcess, child: InferenceProcess):
     parent_conn, child_conn = Pipe()
     parent.add_child(Relative(child, child_conn))
     child.add_parent(Relative(parent, parent_conn))
-
