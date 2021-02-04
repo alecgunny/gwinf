@@ -6,7 +6,7 @@ from tritonclient import grpc as triton
 
 from stillwater import (
     DummyDataGenerator,
-    LowLatencyFrameDataGenerator,
+    LowLatencyFrameGenerator,
     ExceptionWrapper,
     pipe,
     StreamingInferenceClient
@@ -20,6 +20,35 @@ console.setFormatter(
 )
 log.addHandler(console)
 log.setLevel(logging.INFO)
+
+# TODO: add kwargs
+DATA_DIR = "/dev/shm/llhoft/H1"
+FILE_PATTERN = "H-H1_llhoft-{}-1.gwf"
+CHANNELS = """
+H1:GDS-CALIB_STRAIN
+H1:PEM-CS_MAINSMON_EBAY_1_DQ
+H1:ASC-INP1_P_INMON
+H1:ASC-INP1_Y_INMON
+H1:ASC-MICH_P_INMON
+H1:ASC-MICH_Y_INMON
+H1:ASC-PRC1_P_INMON
+H1:ASC-PRC1_Y_INMON
+H1:ASC-PRC2_P_INMON
+H1:ASC-PRC2_Y_INMON
+H1:ASC-SRC1_P_INMON
+H1:ASC-SRC1_Y_INMON
+H1:ASC-SRC2_P_INMON
+H1:ASC-SRC2_Y_INMON
+H1:ASC-DHARD_P_INMON
+H1:ASC-DHARD_Y_INMON
+H1:ASC-CHARD_P_INMON
+H1:ASC-CHARD_Y_INMON
+H1:ASC-DSOFT_P_INMON
+H1:ASC-DSOFT_Y_INMON
+H1:ASC-CSOFT_P_INMON
+H1:ASC-CSOFT_Y_INMON
+"""
+CHANNELS = [x for x in CHANNELS.split("\n") if x]
 
 
 class Empty(Exception):
@@ -80,6 +109,20 @@ def main(
         if use_dummy:
             data_gen = DummyDataGenerator(
                 x.shape()[1:], name, kernel_stride
+            )
+        else:
+            if name == "strain":
+                channels = [CHANNELS[0], CHANNELS[0]]
+            else:
+                channels = channels[1:]
+            data_gen = LowLatencyFrameGenerator(
+                DATA_DIR,
+                channels,
+                sample_rate=4000,
+                kernel_stride=kernel_stride,
+                t0=None,
+                file_pattern=FILE_PATTERN,
+                name=name
             )
         pipe(data_gen, client)
         processes.append(data_gen)
