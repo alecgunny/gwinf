@@ -1,2 +1,3 @@
 attrs
 tblib
+git+https://github.com/alecgunny/stillwater.git

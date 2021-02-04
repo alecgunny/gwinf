@@ -16,7 +16,9 @@ docker run --rm -it \
     --gpus all \
     -u $(id -u):$(id -g) \
     gwe2e/export:$TAG-dev \
-        --count $COUNT --platform onnx --kernel-stride $STRIDE
+        --count $COUNT \
+        --platform onnx \
+        --kernel-stride $STRIDE
 
 # touch empty file in ensemble model version
 # dir so that gsutil knows to copy it

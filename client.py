@@ -4,8 +4,9 @@ import time
 
 from tritonclient import grpc as triton
 
-from inference_process import (
+from stillwater import (
     DummyDataGenerator,
+    LowLatencyFrameDataGenerator,
     ExceptionWrapper,
     pipe,
     StreamingInferenceClient
