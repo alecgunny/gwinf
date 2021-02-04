@@ -1,6 +1,6 @@
-[submodule "tsinfer"]
-	path = tsinfer
-	url = https://github.com/alecgunny/tsinfer.git
 [submodule "exportlib"]
 	path = exportlib
 	url = https://github.com/alecgunny/exportlib.git
+[submodule "stillwater"]
+	path = stillwater
+	url = git@github.com:alecgunny/stillwater.git
