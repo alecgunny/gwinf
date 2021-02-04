@@ -21,7 +21,7 @@ console.setFormatter(
 log.addHandler(console)
 log.setLevel(logging.INFO)
 
-# TODO: add kwargs
+# TODO: add as command line args
 DATA_DIR = "/dev/shm/llhoft/H1"
 FILE_PATTERN = "H-H1_llhoft-{}-1.gwf"
 CHANNELS = """
