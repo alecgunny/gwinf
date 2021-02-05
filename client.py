@@ -26,27 +26,27 @@ DATA_DIR = "/dev/shm/llhoft/H1"
 FILE_PATTERN = "H-H1_llhoft-{}-1.gwf"
 CHANNELS = """
 H1:GDS-CALIB_STRAIN
-H1:PEM-CS_MAINSMON_EBAY_1_DQ
-H1:ASC-INP1_P_INMON
-H1:ASC-INP1_Y_INMON
-H1:ASC-MICH_P_INMON
-H1:ASC-MICH_Y_INMON
-H1:ASC-PRC1_P_INMON
-H1:ASC-PRC1_Y_INMON
-H1:ASC-PRC2_P_INMON
-H1:ASC-PRC2_Y_INMON
-H1:ASC-SRC1_P_INMON
-H1:ASC-SRC1_Y_INMON
-H1:ASC-SRC2_P_INMON
-H1:ASC-SRC2_Y_INMON
-H1:ASC-DHARD_P_INMON
-H1:ASC-DHARD_Y_INMON
-H1:ASC-CHARD_P_INMON
-H1:ASC-CHARD_Y_INMON
-H1:ASC-DSOFT_P_INMON
-H1:ASC-DSOFT_Y_INMON
-H1:ASC-CSOFT_P_INMON
-H1:ASC-CSOFT_Y_INMON
+H1:DMT-DQ_VECTOR
+H1:DMT-DQ_VECTOR_GATED
+H1:GDS-CALIB_F_CC
+H1:GDS-CALIB_F_CC_NOGATE
+H1:GDS-CALIB_F_S_SQUARED
+H1:GDS-CALIB_F_S_SQUARED_NOGATE
+H1:GDS-CALIB_KAPPA_C
+H1:GDS-CALIB_KAPPA_C_NOGATE
+H1:GDS-CALIB_KAPPA_PUM_IMAGINARY
+H1:GDS-CALIB_KAPPA_PUM_IMAGINARY_NOGATE
+H1:GDS-CALIB_KAPPA_PUM_REAL
+H1:GDS-CALIB_KAPPA_PUM_REAL_NOGATE
+H1:GDS-CALIB_KAPPA_TST_IMAGINARY
+H1:GDS-CALIB_KAPPA_TST_IMAGINARY_NOGATE
+H1:GDS-CALIB_KAPPA_TST_REAL
+H1:GDS-CALIB_KAPPA_TST_REAL_NOGATE
+H1:GDS-CALIB_KAPPA_UIM_IMAGINARY
+H1:GDS-CALIB_KAPPA_UIM_IMAGINARY_NOGATE
+H1:GDS-CALIB_KAPPA_UIM_REAL
+H1:GDS-CALIB_KAPPA_UIM_REAL_NOGATE
+H1:GDS-CALIB_SRC_Q_INVERSE
 """
 CHANNELS = [x for x in CHANNELS.split("\n") if x]
 
@@ -102,7 +102,7 @@ def main(
     use_dummy=True
 ):
     client = StreamingInferenceClient(
-        url, "gwe2e", 1, "client"
+        url, "gwe2e", 1, "client", sequence_id=1001
     )
     processes = [client]
     for name, x in client.inputs.items():
@@ -112,9 +112,9 @@ def main(
             )
         else:
             if name == "strain":
-                channels = [CHANNELS[0], CHANNELS[0]]
+                channels = CHANNELS[:2]
             else:
-                channels = channels[1:]
+                channels = CHANNELS[1:]
             data_gen = LowLatencyFrameGenerator(
                 DATA_DIR,
                 channels,
@@ -153,9 +153,9 @@ def main(
     log.info(f"Warmed up with {packages}")
 
     average_latency = 0
-    for i in range(10000):
+    for i in range(num_iterations):
         try:
-            package = get_output(out_pipes, timeout=0.1)
+            package = get_output(out_pipes, timeout=1)
         except Empty:
             cleanup(processes)
             raise RuntimeError
@@ -170,7 +170,7 @@ def main(
         msg = "Average latency: {} us, Average Throughput: {} frames/s".format(
             int(average_latency * 10**6), throughput
         )
-        if i < 9999:
+        if i < (num_iterations - 1):
             print(msg, end="\r", flush=True)
         else:
             log.info(msg)
