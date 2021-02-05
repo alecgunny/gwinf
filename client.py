@@ -142,7 +142,7 @@ def main(
     log.info(f"Warmed up with {packages}")
 
     average_latency = 0
-    for i in range(10000):
+    for i in range(num_iterations):
         try:
             package = get_output(out_pipes, timeout=0.1)
         except Empty:
@@ -159,7 +159,7 @@ def main(
         msg = "Average latency: {} us, Average Throughput: {} frames/s".format(
             int(average_latency * 10**6), throughput
         )
-        if i < 9999:
+        if i < (num_iterations - 1):
             print(msg, end="\r", flush=True)
         else:
             log.info(msg)
