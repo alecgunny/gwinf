@@ -55,15 +55,6 @@ class Empty(Exception):
     pass
 
 
-class Output:
-    def __init__(self, name: str):
-        self.name = name
-        self._parents = {}
-
-    def add_parent(self, relative):
-        self._parents[relative.process.name] = relative.conn
-
-
 def cleanup(processes):
     for process in processes:
         process.stop()
@@ -81,8 +72,7 @@ def cleanup(processes):
 def get_output(pipes, timeout=1e-3):
     start_time = time.time()
     while time.time() - start_time < timeout:
-        for p in pipes:
-            conn = p._parents["client"]
+        for conn in pipes:
             if conn.poll():
                 result = conn.recv()
                 break
@@ -129,8 +119,7 @@ def main(
 
     out_pipes = []
     for output in client.outputs:
-        out_pipes.append(Output(output.name()))
-        pipe(client, out_pipes[-1])
+        out_pipes.append(pipe(client, output.name()))
 
     for process in processes:
         process.start()
