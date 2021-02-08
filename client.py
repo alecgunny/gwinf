@@ -4,13 +4,8 @@ import time
 
 from tritonclient import grpc as triton
 
-from stillwater import (
-    DummyDataGenerator,
-    LowLatencyFrameGenerator,
-    ExceptionWrapper,
-    pipe,
-    StreamingInferenceClient
-)
+from stillwater import pipe, sync_recv
+from stillwater.data_generator import DummyDataGenerator, LowLatencyFrameGenerator
 
 
 log = logging.getLogger()
@@ -51,10 +46,6 @@ H1:ASC-CSOFT_Y_INMON
 CHANNELS = [x for x in CHANNELS.split("\n") if x]
 
 
-class Empty(Exception):
-    pass
-
-
 def cleanup(processes):
     for process in processes:
         process.stop()
@@ -69,21 +60,6 @@ def cleanup(processes):
             print(f"Process {process.name} couldn't join")
 
 
-def get_output(pipes, timeout=1e-3):
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        for conn in pipes:
-            if conn.poll():
-                result = conn.recv()
-                break
-        else:
-            continue
-        break
-    else:
-        raise Empty
-    return result
-
-
 def main(
     kernel_stride: float,
     url: str,
@@ -92,7 +68,7 @@ def main(
     use_dummy=True
 ):
     client = StreamingInferenceClient(
-        url, "gwe2e", 1, "client"
+        url, "gwe2e", 1, "client", sequence_id=1001
     )
     processes = [client]
     for name, x in client.inputs.items():
@@ -117,9 +93,9 @@ def main(
         pipe(data_gen, client)
         processes.append(data_gen)
 
-    out_pipes = []
+    out_pipes = {}
     for output in client.outputs:
-        out_pipes.append(pipe(client, output.name()))
+        out_pipes[name] = pipe(client, output.name())
 
     for process in processes:
         process.start()
@@ -128,13 +104,15 @@ def main(
     log.info(f"Warming up for {num_warm_ups} batches")
     for i in range(num_warm_ups):
         try:
-            package = get_output(out_pipes, timeout=0.1)
-            packages += 1
-        except Empty:
-            continue
-        if isinstance(package, ExceptionWrapper):
+            packages = sync_recv(out_pipes, timeout=1)
+        except Exception:
             cleanup(processes)
-            raise package.reraise()
+            raise
+
+        if packages is None:
+            time.sleep(0.1)
+            continue
+        packages += 1
 
     if packages == 0:
         cleanup(processes)
@@ -144,16 +122,15 @@ def main(
     average_latency = 0
     for i in range(num_iterations):
         try:
-            package = get_output(out_pipes, timeout=0.1)
-        except Empty:
+            package = sync_recv(out_pipes, timeout=0.1)
+        except Exception:
             cleanup(processes)
-            raise RuntimeError
+            raise
 
-        if isinstance(package, ExceptionWrapper):
-            cleanup(processes)
-            raise package.reraise()
+        if packages is None:
+            continue
+
         latency, throughput = package.t0
-
         average_latency += (latency - average_latency) / (i + 1)
 
         msg = "Average latency: {} us, Average Throughput: {} frames/s".format(
@@ -163,8 +140,12 @@ def main(
             print(msg, end="\r", flush=True)
         else:
             log.info(msg)
+
+    # spin everything down
     cleanup(processes)
 
+    # report on how individual models in the
+    # ensemble did
     client = triton.InferenceServerClient(url)
     inference_stats = client.get_inference_statistics().model_stats
     for stat in inference_stats:
