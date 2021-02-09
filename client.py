@@ -16,35 +16,6 @@ console.setFormatter(
 log.addHandler(console)
 log.setLevel(logging.INFO)
 
-# TODO: add as command line args
-DATA_DIR = "/dev/shm/llhoft/H1"
-FILE_PATTERN = "H-H1_llhoft-{}-1.gwf"
-CHANNELS = """
-H1:GDS-CALIB_STRAIN
-H1:PEM-CS_MAINSMON_EBAY_1_DQ
-H1:ASC-INP1_P_INMON
-H1:ASC-INP1_Y_INMON
-H1:ASC-MICH_P_INMON
-H1:ASC-MICH_Y_INMON
-H1:ASC-PRC1_P_INMON
-H1:ASC-PRC1_Y_INMON
-H1:ASC-PRC2_P_INMON
-H1:ASC-PRC2_Y_INMON
-H1:ASC-SRC1_P_INMON
-H1:ASC-SRC1_Y_INMON
-H1:ASC-SRC2_P_INMON
-H1:ASC-SRC2_Y_INMON
-H1:ASC-DHARD_P_INMON
-H1:ASC-DHARD_Y_INMON
-H1:ASC-CHARD_P_INMON
-H1:ASC-CHARD_Y_INMON
-H1:ASC-DSOFT_P_INMON
-H1:ASC-DSOFT_Y_INMON
-H1:ASC-CSOFT_P_INMON
-H1:ASC-CSOFT_Y_INMON
-"""
-CHANNELS = [x for x in CHANNELS.split("\n") if x]
-
 
 def cleanup(processes):
     for process in processes:
@@ -61,14 +32,24 @@ def cleanup(processes):
 
 
 def main(
-    kernel_stride: float,
     url: str,
+    model_name: str,
+    model_version: int,
+    sequence_id: int,
+    kernel_stride: float,
+    channels: typing.Optional[typing.Dict[str, typing.List[str]]] = None,
+    data_dirs: typing.Optional[typing.Dict[str, str]] = None,
+    file_patterns: typing.Optional[typing.Dict[str, str]] = None,
+    use_dummy: bool = False,
     num_iterations: int = 10000,
-    num_warm_ups: int = 50,
-    use_dummy=True
+    num_warm_ups: int = 50
 ):
     client = StreamingInferenceClient(
-        url, "gwe2e", 1, "client", sequence_id=1001
+        url=url,
+        model_name=model_name,
+        model_version=model_version,
+        name="client",
+        sequence_id=sequence_id
     )
     processes = [client]
     for name, x in client.inputs.items():
@@ -77,17 +58,13 @@ def main(
                 x.shape()[1:], name, kernel_stride
             )
         else:
-            if name == "strain":
-                channels = [CHANNELS[0], CHANNELS[0]]
-            else:
-                channels = channels[1:]
             data_gen = LowLatencyFrameGenerator(
-                DATA_DIR,
-                channels,
+                data_dirs[name],
+                channels[name],
                 sample_rate=4000,
                 kernel_stride=kernel_stride,
                 t0=None,
-                file_pattern=FILE_PATTERN,
+                file_pattern=file_patterns[name],
                 name=name
             )
         pipe(data_gen, client)
@@ -153,6 +130,7 @@ def main(
         for field, data in stat.inference_stats.ListFields():
             if field.name == "fail":
                 continue
+
             field = field.name
             time = int(data.ns / data.count / 1000)
             msg = f"{name}\tAverage {field} time: {time}"
@@ -161,35 +139,127 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--kernel-stride",
-        type=float,
-        required=True,
-        help="Time between frame snapshosts"
+
+    client_parser = parser.add_argument_group(
+        title="Client",
+        help=(
+            "Arguments for instantiation the Triton "
+            "client instance"
+        )
     )
-    parser.add_argument(
+    client_parser.add_argument(
         "--url",
         type=str,
         default="localhost:8001",
         help="Server URL"
     )
-    parser.add_argument(
+    client_parser.add_argument(
+        "--model-name",
+        type=str,
+        default="gwe2e",
+        help="Name of model to send requests to"
+    )
+    client_parser.add_argument(
+        "--model-version",
+        type=int,
+        default=1,
+        help="Model version to send requests to"
+    )
+    client_parser.add_argument(
+        "--sequence-id",
+        type=int,
+        default=1001,
+        help="Sequence identifier to use for the client stream"
+    )
+
+    data_parser = parser.add_argument_group(
+        title="Data",
+        help="Arguments for instantiating the client data sources"
+    )
+    data_parser.add_argument(
+        "--kernel-stride",
+        type=float,
+        required=True,
+        help="Time between frame snapshosts"
+    )
+    data_parser.add_argument(
+        "--use-dummy",
+        action="store_true",
+        help=(
+            "If set, the client will generate and send requests "
+            "using random dummy data. All data directories and "
+            "filename formats will accordingly be ignored."
+        )
+    )
+
+    inputs = ["hanford witness", "livingston witness", "strain"]
+    for input in inputs:
+        name = input if input == "strain" else "witness-" + input[0]
+        input_group = data_parser.add_argument_group(input.title())
+        input_group.add_argument(
+            f"--{name}-data-dir",
+            type=str,
+            default=None
+            help=(
+                "Directory for LLF files corresponding to "
+                f"{input} channels"
+            )
+        )
+        input_group.add_argument(
+            f"--{name}-file-pattern",
+            type=str,
+            default=None,
+            help=(
+                "File pattern for timestamped LLF files corresponding "
+                f"to {input} channels"
+            )
+        )
+        input_group.add_argument(
+            f"--{name}-channels",
+            type=str,
+            nargs="+",
+            required=True,
+            help=f"Names of channels to use for {input} stream"
+        )
+
+    runtime_parser = parser.add_argument_group(
+        title="Run Options",
+        help="Arguments parameterizing client run"
+    )
+    runtime_parser.add_argument(
         "--num-iterations",
         type=int,
         default=10000,
         help="Number of requests to get for profiling"
     )
-    parser.add_argument(
+    runtime_parser.add_argument(
         "--num-warm-ups",
         type=int,
         default=50,
         help="Number of warm up requests"
     )
-    parser.add_argument(
-        "--use-dummy",
-        action="store_true",
-        help="Whether to use dummy data generators"
-    )
+    flags = vars(parser.parse_args())
 
-    flags = parser.parse_args()
-    main(**vars(flags))
+    file_formats, data_dirs, channels = {}, {}, {}
+    def _check_arg(d, arg, name):
+        try:
+            d[name] = flags.pop(f"{name}_{arg}")
+        except KeyError:
+            if not flags.use_dummy:
+                raise argparse.ArgumentError(
+                    "Must provide {} for {} input stream".format(
+                        arg.replace("_", " "), name
+                    )
+                )
+
+    for input in inputs:
+        name = input if input == "strain" else "witness_" + input[0]
+
+        _check_arg(channels, "channels", name)
+        _check_arg(file_patterns, "file_pattern", name)
+        _check_arg(data_dirs, "data_dir", name)
+
+    flags["channels"] = channels
+    flags["file_patterns"] = file_patterns
+    flags["data_dirs"] = data_dirs
+    main(**flags)
