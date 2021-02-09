@@ -6,7 +6,7 @@ DATA_DIR='/dev/shm/llhoft/H1'
 FILE_PATTERN='H-H1_llhoft-{}-1.gwf'
 CMD="
     python client.py \
-        --url 34.82.145.3 \
+        --url 34.82.145.3:8001 \
             --model-name gwe2e \
             --model-version 1 \
             --sequence-id 1001 \
@@ -27,7 +27,7 @@ echo $CMD
 singularity exec \
     --home $PWD:/srv \
     --pwd /srv \
-    --bind $PWD/stillwater:/opt/stillwater \
+    --bind $PWD/stillwater:/opt/src/stillwater \
     --bind /cvmfs \
     --scratch /var/tmp \
     --scratch /tmp \

@@ -1,10 +1,12 @@
 import argparse
 import logging
 import time
+import typing
 
 from tritonclient import grpc as triton
 
 from stillwater import pipe, sync_recv
+from stillwater.client import StreamingInferenceClient
 from stillwater.data_generator import DummyDataGenerator, LowLatencyFrameGenerator
 
 
@@ -73,51 +75,58 @@ def main(
 
     out_pipes = {}
     for output in client.outputs:
-        out_pipes[name] = pipe(client, output.name())
+        out_pipes[output.name()] = pipe(client, output.name())
 
     for process in processes:
         process.start()
 
-    packages = 0
+    packages_recvd = 0
     log.info(f"Warming up for {num_warm_ups} batches")
     for i in range(num_warm_ups):
         try:
-            packages = sync_recv(out_pipes, timeout=1)
+            package = sync_recv(out_pipes, timeout=1)
         except Exception:
             cleanup(processes)
             raise
 
-        if packages is None:
+        if package is None:
             time.sleep(0.1)
             continue
-        packages += 1
+        packages_recvd += 1
 
-    if packages == 0:
+    if packages_recvd == 0:
         cleanup(processes)
         raise RuntimeError("Nothing ever showed up!")
-    log.info(f"Warmed up with {packages}")
+    log.info(f"Warmed up with {packages_recvd}")
 
-    average_latency = 0
-    for i in range(num_iterations):
+    average_latency, packages_recvd = 0, 0
+    while packages_recvd < num_iterations:
         try:
             package = sync_recv(out_pipes, timeout=0.1)
         except Exception:
             cleanup(processes)
             raise
 
-        if packages is None:
+        if package is None:
             continue
 
-        latency, throughput = package.t0
+        latency, throughput = 0, 0
+        for pack in package.values():
+            l, t = pack.t0
+            throughput += t
+            latency += l
+        throughput /= len(package)
+        latency /= len(package)
         average_latency += (latency - average_latency) / (i + 1)
 
         msg = "Average latency: {} us, Average Throughput: {} frames/s".format(
             int(average_latency * 10**6), throughput
         )
-        if i < (num_iterations - 1):
-            print(msg, end="\r", flush=True)
-        else:
-            log.info(msg)
+        print(msg, end="\r", flush=True)
+        packages_recvd += 1
+
+    print("\r")
+    log.info(msg)
 
     # spin everything down
     cleanup(processes)
@@ -133,8 +142,8 @@ def main(
                 continue
 
             field = field.name
-            time = int(data.ns / data.count / 1000)
-            msg = f"{name}\tAverage {field} time: {time}"
+            average_time = int(data.ns / data.count / 1000)
+            msg = f"{name}\tAverage {field} time: {average_time}"
             logging.info(msg)
 
 
@@ -143,7 +152,7 @@ if __name__ == "__main__":
 
     client_parser = parser.add_argument_group(
         title="Client",
-        help=(
+        description=(
             "Arguments for instantiation the Triton "
             "client instance"
         )
@@ -175,7 +184,7 @@ if __name__ == "__main__":
 
     data_parser = parser.add_argument_group(
         title="Data",
-        help="Arguments for instantiating the client data sources"
+        description="Arguments for instantiating the client data sources"
     )
     data_parser.add_argument(
         "--kernel-stride",
@@ -225,7 +234,7 @@ if __name__ == "__main__":
 
     runtime_parser = parser.add_argument_group(
         title="Run Options",
-        help="Arguments parameterizing client run"
+        description="Arguments parameterizing client run"
     )
     runtime_parser.add_argument(
         "--num-iterations",
@@ -241,7 +250,7 @@ if __name__ == "__main__":
     )
     flags = vars(parser.parse_args())
 
-    file_formats, data_dirs, channels = {}, {}, {}
+    file_patterns, data_dirs, channels = {}, {}, {}
     def _check_arg(d, arg, name):
         try:
             d[name] = flags.pop(f"{name}_{arg}")
