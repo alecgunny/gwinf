@@ -1,0 +1,13 @@
+name: gwe2e-client
+channels:
+  - conda-forge
+dependencies:
+  - python=3.8
+  - bokeh
+  - numpy
+  - scipy
+  - python-nds2-client
+  - gwpy
+  - python-ldas-tools-framecpp
+  - pip:
+      - -r requirements.txt
