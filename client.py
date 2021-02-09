@@ -51,6 +51,7 @@ def main(
         sequence_id=sequence_id
     )
     processes = [client]
+    t0 = None
     for name, x in client.inputs.items():
         if use_dummy:
             data_gen = DummyDataGenerator(
@@ -62,10 +63,11 @@ def main(
                 channels[name],
                 sample_rate=4000,
                 kernel_stride=kernel_stride,
-                t0=None,
+                t0=t0,
                 file_pattern=file_patterns[name],
                 name=name
             )
+            t0 = data_gen._generator_fn.t0
         pipe(data_gen, client)
         processes.append(data_gen)
 
