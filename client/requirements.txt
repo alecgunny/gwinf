@@ -2,7 +2,6 @@
 tritonclient[all]
 attrs
 tblib
-/opt/deepclean
--e ../stillwater
+-e ./stillwater/
 # git+https://github.com/alecgunny/stillwater.git#egg=stillwater
 

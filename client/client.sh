@@ -1,36 +1,60 @@
 #! /bin/bash -e
+while getopts ":u:m:s:k:h" opt; do
+    case ${opt} in
+        u )
+            url=${OPTARG}
+            ;;
+        m )
+            model=${OPTARG}
+            ;;
+        s )
+            seqid=${OPTARG}
+            ;;
+        k )
+            kstride=${OPTARG}
+            ;;
+        h )
+            echo "Run a streaming inference client"
+            echo "Options:"
+            echo "--------"
+            echo "    -u:    Server URL. Required."
+            echo "    -m:    Model name. Defaults to 'gwe2e'"
+            echo "    -s:    Sequence ID used to identify this stream. Defaults to 1001"
+            echo "    -k:    Kernel stride in seconds. Defaults to 0.002"
+            echo "    -h:    Display this help"
+            ;;
+        \? )
+            echo "Unrecognized argument ${opt}"
+            exit 1
+    esac
+done
+shift $((OPTIND -1))
 
-IMAGE='deepclean-prod:client-20.07'
+model=${model:-gwe2e}
+seqid=${seqid:-1001}
+kstride=${kstride:-0.002}
+if [[ -z ${url} ]]; then
+    echo "Must specify server url"
+    exit 1
+fi
+
 CHANNELS=( $(cat channels.txt) )
 DATA_DIR='/dev/shm/llhoft/H1'
 FILE_PATTERN='H-H1_llhoft-{}-1.gwf'
-CMD="
-    python client.py \
-        --url 34.82.145.3:8001 \
-            --model-name gwe2e \
-            --model-version 1 \
-            --sequence-id 1001 \
-            --kernel-stride 0.002 \
-            --witness-h-data-dir $DATA_DIR \
-            --witness-l-data-dir $DATA_DIR \
-            --strain-data-dir $DATA_DIR \
-            --witness-h-file-pattern $FILE_PATTERN \
-            --witness-l-file-pattern $FILE_PATTERN \
-            --strain-file-pattern $FILE_PATTERN \
-            --witness-h-channels ${CHANNELS[@]:1} \
-            --witness-l-channels ${CHANNELS[@]:1} \
-            --strain-channels ${CHANNELS[@]:0:2} \
-"
-echo "Running command:"
-echo $CMD
 
-singularity exec \
-    --home $PWD:/srv \
-    --pwd /srv \
-    --bind $PWD/stillwater:/opt/src/stillwater \
-    --bind /cvmfs \
-    --scratch /var/tmp \
-    --scratch /tmp \
-    --pid \
-    /cvmfs/singularity.opensciencegrid.org/alec.gunny/$IMAGE \
-        /bin/bash -c "source activate deepclean && $CMD"
+python client.py \
+    --url ${url} \
+    --model-name ${model} \
+    --model-version 1 \
+    --sequence-id ${seqid} \
+    --kernel-stride ${kstride} \
+    --witness-h-data-dir $DATA_DIR \
+    --witness-l-data-dir $DATA_DIR \
+    --strain-data-dir $DATA_DIR \
+    --witness-h-file-pattern $FILE_PATTERN \
+    --witness-l-file-pattern $FILE_PATTERN \
+    --strain-file-pattern $FILE_PATTERN \
+    --witness-h-channels ${CHANNELS[@]:1} \
+    --witness-l-channels ${CHANNELS[@]:1} \
+    --strain-channels ${CHANNELS[@]:0:2}
+
