@@ -113,7 +113,7 @@ def main(
             field = field.name
             average_time = int(data.ns / data.count / 1000)
             msg = f"{name}\tAverage {field} time: {average_time}"
-            logging.info(msg)
+            log.info(msg)
 
 
 if __name__ == "__main__":

@@ -3,3 +3,4 @@
 **/.astropy/
 **/.cache/
 **/.bash_history
+**/__pycache__/

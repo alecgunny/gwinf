@@ -1,5 +1,6 @@
 import argparse
 import logging
+import time
 import typing
 
 import attr
@@ -46,6 +47,7 @@ class Pipeline:
             self.cleanup()
             raise
         return package
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
