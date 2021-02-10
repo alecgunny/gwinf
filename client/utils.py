@@ -153,6 +153,7 @@ def parse_args():
     flags = vars(parser.parse_args())
 
     file_patterns, data_dirs, channels = {}, {}, {}
+
     def _check_arg(d, arg, name):
         try:
             d[name] = flags.pop(f"{name}_{arg}")
@@ -175,4 +176,3 @@ def parse_args():
     flags["file_patterns"] = file_patterns
     flags["data_dirs"] = data_dirs
     return flags
-
