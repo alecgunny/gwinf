@@ -1,4 +1,3 @@
-import copy
 import time
 import typing
 
@@ -52,6 +51,11 @@ def main(
         pipe(data_gen, client)
         processes.append(data_gen)
 
+    # do some quick profiling on the data generator
+    # so that we can confirm how fast data is being
+    # sent to the server
+    # TODO: how can we do this without copy-pasted
+    # code?
     if use_dummy:
         dummy_gen = DummyDataGenerator(
             x.shape()[1:], name, sample_rate=4000
@@ -79,6 +83,7 @@ def main(
     log.info(f"Data generation throughput: {throughput:0.2f} frames/s")
     dummy_pipeline.cleanup()
 
+    # now build and start our real pipeline
     out_pipes = {}
     for output in client.outputs:
         out_pipes[output.name()] = pipe(client, output.name())
