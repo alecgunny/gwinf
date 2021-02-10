@@ -1,6 +1,11 @@
 # Streaming Inference Client
 Make streaming inference requests to the ensemble model exported in `~/export`, which should be sitting on a Google Kubernetes Engine (GKE) cluster somewhere. This will just report the latency and throughput achieved by the model; it won't do anything particularly interesting with the predictions the model produces (which is fine for now, since we're using a presumably dummy model and sending dummy data to it).
 
+First build the conda environment (assuming you have conda installed):
+```
+conda env create -f conda/environment.yaml
+```
+
 Running is as simple as
 ```
 ./run.sh -u <url of GKE load balancer>
