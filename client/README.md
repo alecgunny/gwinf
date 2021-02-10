@@ -5,6 +5,10 @@ First build the conda environment (assuming you have conda installed):
 ```
 conda env create -f conda/environment.yaml
 ```
+Then activate it with
+```
+source activate gwe2e-client
+```
 
 Running is as simple as
 ```
