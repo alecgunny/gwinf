@@ -63,4 +63,5 @@ python client.py \
     --witness-h-channels ${CHANNELS[@]:1} \
     --witness-l-channels ${CHANNELS[@]:1} \
     --strain-channels ${CHANNELS[@]:0:2} \
+    --num-iterations 10000 \
     ${dummy}
