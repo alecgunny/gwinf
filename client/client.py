@@ -3,8 +3,6 @@ import typing
 from collections import defaultdict
 
 from tritonclient import grpc as triton
-
-from stillwater import pipe
 from stillwater.client import StreamingInferenceClient
 
 from utils import get_inference_stats, log, parse_args, Pipeline
