@@ -52,32 +52,32 @@ def main(
         pipe(data_gen, client)
         processes.append(data_gen)
 
-    if use_dummy:
-        dummy_gen = DummyDataGenerator(
-            x.shape()[1:], name, sample_rate=4000
-        )
-    else:
-        dummy_gen = LowLatencyFrameGenerator(
-            data_dirs[name],
-            channels[name],
-            sample_rate=4000,
-            kernel_stride=kernel_stride,
-            t0=t0,
-            file_pattern=file_patterns[name],
-            name=name
-        )
-    dummy_pipe = pipe(dummy_gen, "main")
-    dummy_pipeline = Pipeline([dummy_gen], {"main": dummy_pipe})
-    dummy_gen.start()
-    start_time = time.time()
-    packages_recvd = 0
-    while time.time() - start_time < 5:
-        package = dummy_pipeline.get()
-        if package is not None:
-            packages_recvd += 1
-    throughput = packages_recvd / 5
-    log.info(f"Data generation throughput: {throughput:0.2f} frames/s")
-    dummy_pipeline.cleanup()
+#     if use_dummy:
+#         dummy_gen = DummyDataGenerator(
+#             x.shape()[1:], name, sample_rate=4000
+#         )
+#     else:
+#         dummy_gen = LowLatencyFrameGenerator(
+#             data_dirs[name],
+#             channels[name],
+#             sample_rate=4000,
+#             kernel_stride=kernel_stride,
+#             t0=t0,
+#             file_pattern=file_patterns[name],
+#             name=name
+#         )
+#     dummy_pipe = pipe(dummy_gen, "main")
+#     dummy_pipeline = Pipeline([dummy_gen], {"main": dummy_pipe})
+#     dummy_gen.start()
+#     start_time = time.time()
+#     packages_recvd = 0
+#     while time.time() - start_time < 10:
+#         package = dummy_pipeline.get()
+#         if package is not None:
+#             packages_recvd += 1
+#     throughput = packages_recvd / 10
+#     log.info(f"Data generation throughput: {throughput:0.2f} frames/s")
+#     dummy_pipeline.cleanup()
 
     out_pipes = {}
     for output in client.outputs:
