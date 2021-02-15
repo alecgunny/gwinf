@@ -29,8 +29,9 @@ class Pipeline:
 
     def cleanup(self):
         for process in self.processes:
-            process.stop()
-            process.join(0.5)
+            if process.is_alive():
+                process.stop()
+                process.join(0.5)
 
             try:
                 process.close()
@@ -47,6 +48,30 @@ class Pipeline:
             self.cleanup()
             raise
         return package
+
+    def __enter__(self):
+        for process in self.processes:
+            if not process.is_alive() and process.exitcode is not None:
+                process.start()
+            # or else what?
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        self.cleanup()
+
+
+def get_inference_stats(client):
+    stats = defaultdict(defaultdict(dict))
+    for stat in client.get_inference_stats():
+        name = stat.name.upper()
+        for field, data in stat.inference_stats.ListFields():
+            if field.name == "fail":
+                continue
+
+            field = field.name
+            stats[name][field]["ns"] = data.ns
+            stats[name][field]["count"] = data.count
+    return stats
 
 
 def parse_args():
