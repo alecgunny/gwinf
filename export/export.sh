@@ -14,7 +14,6 @@ docker run --rm -it \
     -v $MODELREPO:/repo \
     --workdir /home/docker \
     --gpus all \
-    --network container:converter \
     -u $(id -u):$(id -g) \
     gwe2e/export:$TAG-dev \
         python export.py \
