@@ -8,6 +8,14 @@ from exportlib.model_repository import ModelRepository
 from exportlib.platform import PlatformName
 
 
+# gpus = tf.config.list_physical_devices('GPU')
+# tf.config.experimental.set_virtual_device_configuration(
+#     gpus[0],
+#     [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=2048)]
+# )
+tf.config.set_visible_devices([], 'GPU')
+print(tf.config.experimental.list_physical_devices('GPU'))
+
 BATCH_SIZE = 1
 
 
@@ -108,6 +116,8 @@ def main(
         platform, precision = platform.split("_")
         if precision == "fp16":
             export_kwargs["use_fp16"] = True
+        if platform == "trt":
+            export_kwargs["url"] = "http://0.0.0.0:5000/onnx"
     except ValueError:
         pass
     platform = PlatformName.__members__[platform.upper()].value
