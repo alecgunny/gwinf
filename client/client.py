@@ -37,7 +37,7 @@ def main(
         from stillwater.data_generator import DummyDataGenerator
         def _get_data_gen(name):
             return DummyDataGenerator(
-                clients.inputs[name].shape()[1:],
+                (client.inputs[name].shape()[1], int(kernel_stride*4000)),
                 name,
                 sample_rate=4000
             )
@@ -111,7 +111,7 @@ def main(
             init_stats = initial_server_stats[model][field]
             total_time = stats["ns"] - init_stats["ns"]
             total_count = stats["count"] - init_stats["count"]
-            average_time = int(total_time / total_count / 1000)
+            average_time = int(total_time / total_count / 100)
 
             log.info(f"{model}\tAverage {field} time: {average_time} us")
 

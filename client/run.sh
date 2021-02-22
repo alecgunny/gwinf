@@ -45,8 +45,8 @@ if [[ -z ${url} ]]; then
 fi
 
 CHANNELS=( $(cat channels.txt) )
-DATA_DIR='/dev/shm/llhoft/H1'
-FILE_PATTERN='H-H1_llhoft-{}-1.gwf'
+DATA_DIR='/dev/shm/kafka/H1_O2'
+FILE_PATTERN='H-H1_O2_llhoft-{}-1.gwf'
 
 python client.py \
     --url ${url} \
@@ -63,5 +63,5 @@ python client.py \
     --witness-h-channels ${CHANNELS[@]:1} \
     --witness-l-channels ${CHANNELS[@]:1} \
     --strain-channels ${CHANNELS[@]:0:2} \
-    --num-iterations 10000 \
+    --num-iterations 500 \
     ${dummy}
