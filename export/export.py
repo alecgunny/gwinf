@@ -13,60 +13,114 @@ tf.config.set_visible_devices([], 'GPU')
 BATCH_SIZE = 1
 
 
-def main(
-    platform: str = "onnx",
-    count: int = 1,
-    kernel_stride: float = 0.002,
-    fs: int = 4000
-):
-    repo = ModelRepository("/repo")
-
+def parse_platform(platform)
     # do some parsing of the deepclean export platform
     deepclean_export_kwargs = {
         "output_names": ["noise"]
     }
     url = None
     try:
+        # see if we have a URL appended to it
         platform, url = platform.split(":", maxsplit=1)
     except ValueError:
+        # nope, ok move on
         pass
 
     try:
+        # see if we have the format trt_<precision>
         platform, precision = platform.split("_")
     except ValueError:
+        # nope, ok this is (presumably) ONNX
+        assert platform == "onnx"
         pass
     else:
+        # indicate we should use fp16 if it was specified
         if precision == "fp16":
             deepclean_export_kwargs["use_fp16"] = True
-        deepclean_export_kwargs["url"] = url
-    platform = PlatformName.__members__[platform.upper()].value
 
-    witness_channels = {"h": 21, "l": 2}
+        # add in the URL, which could just be None
+        # don't add it for onnx since that platform
+        # doesn't have that kwarg
+        deepclean_export_kwargs["url"] = url
+
+    # now map to a real Platform
+    try:
+        platform = PlatformName.__members__[platform.upper()].value
+    except KeyError:
+        raise ValueError(f"Unrecognized platform {platform}")
+    return platform, deepclean_export_kwargs
+
+
+def main(
+    platform: str = "onnx",
+    gps: int = 1,
+    count: int = 1,
+    base_name: typing.Optional[str] = None,
+    kernel_stride: float = 0.002,
+    fs: float = 4000,
+    kernel_size: float = 1.0
+):
+    repo = ModelRepository("/repo")
+    snapshot_size = int(fs*kernel_size)
+    base_name = base_name + "_" if base_name is not None else ""
+
+    platform, deepclean_export_kwargs = parse_platform(platform)
+    witness_channels = {"h": 21, "l": 21}
     deepcleans = {}
     for detector, num_channels in witness_channels.items():
+        # basic formula:
+        # 1: create the model architecture (i.e. the torch Module
+        # that executes all of the operations that perform your
+        # input-output mapping). This would typically be done
+        # in order to perform training
         arch = DeepClean(num_channels)
         arch.eval()
 
-        model = repo.create_model(f"deepclean_{detector}")
-        model.config.add_instance_group(count)
+        # 1b: train the model, which we're not doing here
+
+        # 2: add a directory for the model architecture to
+        # your model repository. This `Model` object represents
+        # that repository entry and its associated metadata
+        model = repo.create_model(
+            f"{base_name}deepclean_{detector}", platform=platform
+        )
+        # 3: Add an instance group that tells Triton how many
+        # GPUs to leverage, and how much to parallelize model
+        # execution on each GPU
+        model.config.add_instance_group(
+            gpus=gpus, count=count
+        )
+
+        # 4: Export the current model architecture to the
+        # model's entry in the repository. This will be creating
+        # some binary representation that is consistent with the
+        # model's metadata and that Triton can leverage to perform
+        # execution at inference time (indeed, the export step
+        # itself records much of the metadata, since it's here
+        # that we freeze in things like input shapes)
         model.export_version(
             arch,
-            input_names={"witness": (BATCH_SIZE, num_channels, fs)},
+            input_names={"witness": (BATCH_SIZE, num_channels, snapshot_size)},
             **deepclean_export_kwargs
         )
+
         deepcleans[detector] = model
 
     postprocessor = PostProcessor()
     postprocessor.eval()
 
-    pp_model = repo.create_model("postproc", platform=PlatformName.ONNX)
-    pp_model.config.add_instance_group(count=count)
+    pp_model = repo.create_model(
+        "{base_name}postproc", platform=PlatformName.ONNX
+    )
+    pp_model.config.add_instance_group(
+        gpus=gpus, count=count
+    )
     pp_model.export_version(
         postprocessor,
         input_shapes={
-            "strain": (BATCH_SIZE, 2, fs),
-            "noise_h": (BATCH_SIZE, fs),
-            "noise_l": (BATCH_SIZE, fs)
+            "strain": (BATCH_SIZE, 2, snapshot_size),
+            "noise_h": (BATCH_SIZE, snapshot_size),
+            "noise_l": (BATCH_SIZE, snapshot_size)
         },
         output_names=["cleaned"]
     )
@@ -84,14 +138,18 @@ def main(
         "weight_init": None,
         "bias_init": None
     }
-    bbh = BBHNet((2, fs), bbh_params)
+    bbh = BBHNet((2, snapshot_size), bbh_params)
     bbh.eval()
 
-    bbh_model = repo.create_model("bbh", platform=PlatformName.ONNX)
-    bbh_model.config.add_instance_group(count=count)
+    bbh_model = repo.create_model(
+        "{base_name}bbh", platform=PlatformName.ONNX
+    )
+    bbh_model.config.add_instance_group(
+        gpus=gpus, count=count
+    )
     bbh_model.export_version(
         bbh,
-        input_shapes={"strain": (BATCH_SIZE, 2, fs)},
+        input_shapes={"strain": (BATCH_SIZE, 2, snapshot_size)},
         output_names=["prob"]
     )
 
@@ -106,7 +164,6 @@ def main(
         ],
         stream_size=int(kernel_stride*fs),
     )
-
 
     for detector, model in deepcleans.items():
         ensemble.pipe(
@@ -129,30 +186,55 @@ if __name__ == "__main__":
     parser.add_argument(
         "--platform",
         type=str,
-        choices=("onnx", "trt_fp16", "trt_fp32"),
         default="onnx",
-        help="Format to export deepclean models in"
+        help=(
+            "Format to export deepclean models in. "
+            "Choices are 'onnx', 'trt_fp32', or 'trt_fp16'. "
+            "Additionally, TensorRT formats can be appended with "
+            ":<url> to indicate that TRT conversion should take "
+            "place on the indicated remote server. For example, "
+            "'trt_fp16:http://localhost:5000/onnx' would indicate that "
+            "there is a local TensorRT conversion service to perform "
+            "conversion to an FP16 inference engine."
+        )
+    )
+    parser.add_argument(
+        "--gpus",
+        type=int,
+        default=1,
+        help="Number of GPUs to host service on"
     )
     parser.add_argument(
         "--count",
         type=int,
         default=1,
-        help="Number of model instances to place on GPU"
+        help="Number of model instances to place per GPU"
     )
+    parser.add_argument(
+        "--base-name",
+        type=str,
+        default=None,
+        help="Name to prepend to all models in the ensemble"
+    )
+
+    # snapshot parameters
     parser.add_argument(
         "--kernel-stride",
         type=float,
         default=0.002,
         help="Time between frame snapshots"
     )
-    # TODO: generalize by making type float,
-    # including kernel-size, and mapping
-    # to int after multiplying
     parser.add_argument(
         "--fs",
-        type=int,
+        type=float,
         default=4000,
         help="Samples in a frame"
+    )
+    parser.add_argument(
+        "--kernel-size",
+        type=float,
+        default=1.0,
+        help="Length of snapshot windows in seconds"
     )
     flags = parser.parse_args()
     main(**vars(flags))
