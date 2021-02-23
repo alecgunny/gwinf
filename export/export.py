@@ -1,10 +1,12 @@
+import typing
+
 import tensorflow as tf
 import torch
 
 from deepclean_prod.nn.net import DeepClean
 from mldet.net import Net as BBHNet
 
-from exportlib.model_repository import ModelRepository
+from exportlib import ModelRepository
 from exportlib.platform import PlatformName
 
 
@@ -12,7 +14,17 @@ tf.config.set_visible_devices([], 'GPU')
 BATCH_SIZE = 1
 
 
-def parse_platform(platform)
+class PostProcessor(torch.nn.Module):
+    def forward(self, strain, noise_h, noise_l):
+        # TODO: needs to add:
+        #    - filtering
+        #    - de-centering
+        #    - any preprocessing for bbh
+        noise = torch.stack([noise_h, noise_l], dim=1)
+        return strain - noise
+
+
+def parse_platform(platform):
     # do some parsing of the deepclean export platform
     deepclean_export_kwargs = {
         "output_names": ["noise"]
@@ -52,7 +64,7 @@ def parse_platform(platform)
 
 def main(
     platform: str = "onnx",
-    gps: int = 1,
+    gpus: int = 1,
     count: int = 1,
     base_name: typing.Optional[str] = None,
     kernel_stride: float = 0.002,
@@ -99,7 +111,7 @@ def main(
         # that we freeze in things like input shapes)
         model.export_version(
             arch,
-            input_names={"witness": (BATCH_SIZE, num_channels, snapshot_size)},
+            input_shapes={"witness": (BATCH_SIZE, num_channels, snapshot_size)},
             **deepclean_export_kwargs
         )
 
@@ -152,9 +164,7 @@ def main(
         output_names=["prob"]
     )
 
-    ensemble = model_repository.create_model(
-        "gwe2e", platform=PlatformName.ENSEMBLE
-    )
+    ensemble = repo.create_model("gwe2e", platform=PlatformName.ENSEMBLE)
     ensemble.add_streaming_inputs(
         inputs=[
             deepcleans["h"].inputs["witness"],
@@ -166,7 +176,7 @@ def main(
 
     for detector, model in deepcleans.items():
         ensemble.pipe(
-            model.outputs["noise"]
+            model.outputs["noise"],
             postprocessor.inputs[f"noise_{detector}"],
             name=f"noise_{detector}"
         )
