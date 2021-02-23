@@ -9,7 +9,6 @@ from exportlib.platform import PlatformName
 
 
 tf.config.set_visible_devices([], 'GPU')
-
 BATCH_SIZE = 1
 
 
