@@ -121,7 +121,7 @@ def main(
     postprocessor.eval()
 
     pp_model = repo.create_model(
-        "{base_name}postproc", platform=PlatformName.ONNX
+        f"{base_name}postproc", platform=PlatformName.ONNX
     )
     pp_model.config.add_instance_group(
         gpus=gpus, count=count
@@ -153,7 +153,7 @@ def main(
     bbh.eval()
 
     bbh_model = repo.create_model(
-        "{base_name}bbh", platform=PlatformName.ONNX
+        f"{base_name}bbh", platform=PlatformName.ONNX
     )
     bbh_model.config.add_instance_group(
         gpus=gpus, count=count
@@ -164,12 +164,13 @@ def main(
         output_names=["prob"]
     )
 
-    ensemble = repo.create_model("gwe2e", platform=PlatformName.ENSEMBLE)
+    ensemble = repo.create_model(
+        f"{base_name}gwe2e", platform=PlatformName.ENSEMBLE)
     ensemble.add_streaming_inputs(
         inputs=[
             deepcleans["h"].inputs["witness"],
             deepcleans["l"].inputs["witness"],
-            postprocessor.inputs["strain"]
+            pp_model.inputs["strain"]
         ],
         stream_size=int(kernel_stride*fs),
     )
@@ -177,15 +178,15 @@ def main(
     for detector, model in deepcleans.items():
         ensemble.pipe(
             model.outputs["noise"],
-            postprocessor.inputs[f"noise_{detector}"],
+            pp_model.inputs[f"noise_{detector}"],
             name=f"noise_{detector}"
         )
-        ensemble.add_output(model.outputs["noise"])
+        ensemble.add_output(model.outputs["noise"], name=f"noise_{detector}")
     ensemble.pipe(
-        postprocessor.outputs["cleaned"],
-        bbh.inputs["strain"]
+        pp_model.outputs["cleaned"],
+        bbh_model.inputs["strain"]
     )
-    ensemble.add_output(bbh.outputs["prob"])
+    ensemble.add_output(bbh_model.outputs["prob"])
     ensemble.export_version()
 
 
