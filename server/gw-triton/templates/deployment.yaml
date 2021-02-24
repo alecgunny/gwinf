@@ -17,15 +17,15 @@ spec:
         fsGroup: 1000
       containers:
       - name: tritonserver
-        image: nvcr.io/nvidia/tritonserver:{{ Values.tritonTag }}-py3
+        image: nvcr.io/nvidia/tritonserver:{{ .Values.tritonTag }}-py3
         command:
         - /bin/bash
         args:
         - -c
-        - LD_LIBRARY_PATH="$LD_LIBRARY_PATH:{{ Values.nvPaths }}" bin/tritonserver --model-repository {{ Values.repo }} --repository-poll-secs 30
+        - LD_LIBRARY_PATH="$LD_LIBRARY_PATH:{{ .Values.nvPaths }}" bin/tritonserver --model-repository {{ .Values.repo }} --repository-poll-secs 30
         resources:
           limits:
-            nvidia.com/gpu: {{ Values.numGPUs }}
+            nvidia.com/gpu: {{ .Values.numGPUs }}
         ports:
         - containerPort: 8000
           protocol: TCP
