@@ -17,20 +17,15 @@ spec:
         fsGroup: 1000
       containers:
       - name: tritonserver
-        image: nvcr.io/nvidia/tritonserver:20.11-py3
-        env:
-        - name: EXTRA_NV_PATHS
-          value: /usr/local/nvidia/lib64:/usr/local/nvidia/bin
-        - name: MODEL_REPO
-          value: gs://gwe2e/repo
+        image: nvcr.io/nvidia/tritonserver:{{ Values.tritonTag }}-py3
         command:
         - /bin/bash
         args:
         - -c
-        - LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$EXTRA_NV_PATHS" bin/tritonserver --model-repository $MODEL_REPO --repository-poll-secs 30
+        - LD_LIBRARY_PATH="$LD_LIBRARY_PATH:{{ Values.nvPaths }}" bin/tritonserver --model-repository {{ Values.repo }} --repository-poll-secs 30
         resources:
           limits:
-            nvidia.com/gpu: 1
+            nvidia.com/gpu: {{ Values.numGPUs }}
         ports:
         - containerPort: 8000
           protocol: TCP
