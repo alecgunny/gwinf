@@ -27,13 +27,7 @@ def main(
             node_pool = cloud.container.NodePool(
                 name="converter-pool",
                 initial_node_count=1,
-                config=cloud.container.NodeConfig(
-                    machine_type="n1-standard-8",
-                    accelerators=[cloud.container.AcceleratorConfig(
-                        accelerator_count=1,
-                        accelerator_type="nvidia-tesla-t4"
-                    )]
-                )
+                config=cloud.tf_node_config(vcpus=4, gpus=1)
             )
             with manager.create_temporary_resource(
                 node_pool, cluster

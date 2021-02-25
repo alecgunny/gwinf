@@ -213,3 +213,13 @@ class GKEClusterManager:
             delete_resource()
             raise
         delete_resource()
+
+
+def t4_node_config(vcpus=8, gpus=1):
+    return container.NodeConfig(
+        machine_type=f"n1-standard-{vcpus}",
+        accelerators=[cloud.container.AcceleratorConfig(
+            accelerator_count=gpus,
+            accelerator_type="nvidia-tesla-t4"
+        )]
+    )
