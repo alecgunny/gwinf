@@ -2,6 +2,5 @@
 tritonclient[all]
 attrs
 tblib
--e ./stillwater/
+-e ./stillwater
 # git+https://github.com/alecgunny/stillwater.git#egg=stillwater
-
