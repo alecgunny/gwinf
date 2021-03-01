@@ -1,11 +1,21 @@
+import base64
+import os
 import re
+import requests
 import time
+import typing
+import yaml
 from contextlib import contextmanager
 from functools import wraps
+from tempfile import NamedTemporaryFile
 
+from google import auth
+from google.auth.transport.requests import Request as AuthRequest
 from google.oauth2 import service_account
 from google.cloud import storage
 from google.cloud import container_v1 as container
+
+import kubernetes
 
 
 def snakeify(name):
@@ -107,9 +117,10 @@ class GKEClusterManager:
             filename=service_account_key_file
         )
         self.name = f"projects/{project}/locations/{zone}"
+        self.resources = {}
 
     @contextmanager
-    def create_temporary_resource(self, resource, parent=None):
+    def manage_resource(self, resource, parent=None, keep=False):
         parent = parent or self
         resource = Resource(resource, parent)
 
@@ -122,9 +133,10 @@ class GKEClusterManager:
             except AttributeError:
                 raise e
 
+        resource_type = snakeify(resource.resource_type).replace("_", " ")
         while True:
             msg = wait_print(
-                f"Waiting for resource {resource.name} to become ready"
+                f"Waiting for {resource_type} {resource.name} to become ready"
             )
             try:
                 status = resource.get(timeout=5).status
@@ -135,9 +147,12 @@ class GKEClusterManager:
                 break
             elif status > 2:
                 raise RuntimeError
-        print(f"\nResource {resource.name} ready", flush=True)
+        print(f"\n{resource_type} {resource.name} ready", flush=True)
 
         def delete_resource():
+            if keep:
+                return
+
             while True:
                 # first try to submit the delete request,
                 # possibly waiting for the resource to
@@ -157,8 +172,8 @@ class GKEClusterManager:
                             raise
                         else:
                             msg = wait_print(
-                                f"Waiting for resource {resource.name} to "
-                                "become available to delete"
+                                f"Waiting for {resource_type} {resource.name} "
+                                "to become available to delete"
                             )
                     except AttributeError:
                         # the exception didn't have a `.code`
@@ -171,7 +186,7 @@ class GKEClusterManager:
             if msg is not None:
                 print("\n", flush=True)
             print(
-                f"Resource {resource.name} delete request submitted",
+                f"{resource_type} {resource.name} delete request submitted",
                 flush=True
             )
 
@@ -181,7 +196,7 @@ class GKEClusterManager:
                 # operation id from the response to
                 # check in on the status of the operations?
                 msg = wait_print(
-                    f"Waiting for resource {resource.name} to delete"
+                    f"Waiting for {resource_type} {resource.name} to delete"
                 )
                 try:
                     status = resource.get(timeout=5).status
@@ -201,13 +216,16 @@ class GKEClusterManager:
                     # something bad happened to the resource,
                     # raise the issue
                     raise RuntimeError(status)
-            print(f"\nResource {resource.name} deleted", flush=True)
 
+            self.resources.pop(resource.name)
+            print(f"\n{resource_type} {resource.name} deleted", flush=True)
+
+        self.resources[resource.name] = resource
         try:
             yield resource
         except:
             print(
-                f"Encountered error, removing resource {resource.name}",
+                f"Encountered error, removing {resource_type} {resource.name}",
                 flush=True
             )
             delete_resource()
@@ -215,10 +233,158 @@ class GKEClusterManager:
         delete_resource()
 
 
+def make_k8s_app_client(cluster):
+    response = cluster.get()
+
+    credentials, project = auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    credentials.refresh(AuthRequest())
+
+    configuration = kubernetes.client.Configuration()
+    configuration.host = f"https://{response.endpoint}"
+    with NamedTemporaryFile(delete=False) as ca_cert:
+        ca_cert.write(
+            base64.b64decode(response.master_auth.cluster_ca_certificate)
+        )
+    configuration.ssl_ca_cert = ca_cert.name
+    configuration.api_key_prefix["authorization"] = "Bearer"
+    configuration.api_key["authorization"] = credentials.token
+
+    return kubernetes.client.ApiClient(configuration)
+
+
+@contextmanager
+def _get_file(file, repo, branch, ignore_if_exists):
+    if repo is not None:
+        # TODO: use main as defualt? or at least try to?
+        branch = branch or "master"
+        url_header = "https://raw.githubusercontent.com"
+        url = f"{url_header}/{repo}/{branch}/{file}"
+
+        yaml_content = requests.get(url).content.decode("utf-8")
+        with NamedTemporaryFile(mode="w", delete=False) as f:
+            f.write(yaml_content)
+            file = f.name
+
+    try:
+        try:
+            yield file
+        except Exception as e:
+            if not ignore_if_exists:
+                raise
+
+            try:
+                info = str(e).split("(Conflict): ")[1]
+                info = yaml.safe_load(info)
+            except Exception:
+                raise e
+            if info["reason"] != "AlreadyExists":
+                raise
+    finally:
+        if repo is not None:
+            os.remove(file)
+
+
+def create_deployment_from_yaml(
+    client: kubernetes.client.ApiClient,
+    file: str,
+    repo: typing.Optional[str] = None,
+    branch: typing.Optional[str] = None,
+    wait: bool = False,
+    ignore_if_exists: bool = False
+):
+    response = None
+    with _get_file(file, repo, branch, ignore_if_exists) as file:
+        with open(file, "r") as f:
+            name = yaml.safe_load(f)["metadata"]["name"]
+        response = kubernetes.utils.create_from_yaml(client, file)
+
+    if not wait:
+        return response
+
+    # TODO: we need to a get if response is None
+    # we also might need to do integer indexing since
+    # sometimes the response can be a list of list
+    # (e.g. for daemonset, not sure what it is for
+    # deployments)
+    # if response is None:
+    #     name = file["metadata"]["name"]
+    # else:
+    #     name = response.metadata.name
+
+    app_client = kubernetes.client.AppsV1Api(client)
+    while True:
+        wait_print(f"Waiting for deployment {name} to deploy")
+        try:
+            # TODO: get namespace from response
+            status = app_client.read_namespaced_deployment(
+                name=name, namespace="default"
+            ).status
+        except kubernetes.client.ApiException:
+            raise
+        ready_replicas = status.ready_replicas
+        if ready_replicas is not None and ready_replicas > 0:
+            break
+        time.sleep(1)
+    print(f"\nDeployment {name} ready")
+    return response
+
+
+def create_service_from_yaml(
+    client: kubernetes.client.ApiClient,
+    file: str,
+    repo: typing.Optional[str] = None,
+    branch: typing.Optional[str] = None,
+    wait: bool = False,
+    ignore_if_exists: bool = False
+):
+    response = None
+    with _get_file(file, repo, branch, ignore_if_exists) as file:
+        with open(file, "r") as f:
+            name = yaml.safe_load(f)["metadata"]["name"]
+        response = kubernetes.utils.create_from_yaml(client, file)
+
+    if not wait:
+        return response
+
+    # if response is None:
+    #     name = file["metadata"]["name"]
+    # else:
+    #     name = response.metadata.name
+
+    core_client = kubernetes.client.CoreV1Api(client)
+    while True:
+        wait_print(f"Waiting for service {name} to be ready")
+        try:
+            # TODO: get namespace from response
+            status = core_client.read_namespaced_service(
+                name=name, namespace="default"
+            ).status
+        except kubernetes.client.ApiException:
+            raise
+        try:
+            ip = status.load_balancer.ingress[0].ip
+            if ip is not None:
+                break
+        except:
+            pass
+    return ip
+
+
 def t4_node_config(vcpus=8, gpus=1):
+    OAUTH_SCOPES = [
+        "https://www.googleapis.com/auth/devstorage.read_only",
+        "https://www.googleapis.com/auth/logging.write",
+        "https://www.googleapis.com/auth/monitoring",
+        "https://www.googleapis.com/auth/service.management.readonly",
+        "https://www.googleapis.com/auth/servicecontrol",
+        "https://www.googleapis.com/auth/trace.append"
+    ]
     return container.NodeConfig(
         machine_type=f"n1-standard-{vcpus}",
-        accelerators=[cloud.container.AcceleratorConfig(
+        oauth_scopes=OAUTH_SCOPES,
+        accelerators=[container.AcceleratorConfig(
             accelerator_count=gpus,
             accelerator_type="nvidia-tesla-t4"
         )]
