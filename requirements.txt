@@ -1,0 +1,10 @@
+--extra-index-url "https://pypi.ngc.nvidia.com"
+tritonclient[all]
+git+https://git.ligo.org/alec.gunny/deepclean-prod.git@tsinfer
+git+https://git.ligo.org/tri.nguyen/bbh_detection_ml.git
+-e C:\\Users\\amacg\\Documents\\MIT\\gwe2e\\export\\exportlib
+-e C:\\Users\\amacg\\Documents\\MIT\\gwe2e\\client_benchmarking\\stillwater
+
+google-cloud-storage
+google-cloud-container
+kubernetes

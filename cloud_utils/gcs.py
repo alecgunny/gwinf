@@ -1,0 +1,79 @@
+import os
+import re
+from functools import lru_cache
+
+from google.auth.transport.requests import Request as AuthRequest
+from google.cloud import storage
+from google.oauth2 import service_account
+
+from cloud_utils.utils import clear_repo
+
+
+class GCSModelRepo:
+    def __init__(self, bucket_name: str, service_account_key_file: str):
+        self.bucket_name = bucket_name
+        credentials = service_account.Credentials.from_service_account_file(
+            service_account_key_file,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        credentials.refresh(AuthRequest())
+        self._client = storage.client.Client(credentials=credentials)
+
+    @property
+    @lru_cache(None)
+    def bucket(self):
+        try:
+            return self._client.get_bucket(self.bucket_name)
+        except Exception as e:
+            try:
+                if e.code == 404:
+                    return self._client.create_bucket(self.bucket_name)
+                else:
+                    raise
+            except AttributeError:
+                raise e
+
+    def export_repo(
+        self,
+        repo_dir: str,
+        start_fresh: bool = True,
+        clear: bool = True
+    ):
+        if start_fresh:
+            for blob in self._client.list_blobs(self.bucket):
+                blob.delete()
+
+        for root, _, files in os.walk(repo_dir):
+            for f in files:
+                path = os.path.join(root, f)
+
+                # get rid of root level path and replace
+                # path separaters in case we're on Windows
+                blob_path = path.replace(os.path.join(repo_dir, ""), "").replace(
+                    "\\", "/"
+                )
+                print(f"Copying {path} to {blob_path}")
+
+                blob = self.bucket.blob(blob_path)
+                blob.upload_from_filename(path)
+
+        if clear:
+            clear_repo(repo_dir)
+
+    def update_model_configs_for_expt(self, expt):
+        """
+        TODO: in a more general framework, get rid of this
+        """
+        for blob in self._client.list_blobs(self.bucket):
+            if (
+                blob.name.startswith(f"kernel-stride-{expt.kernel_stride:0.3f}")
+                and blob.name.endswith(".pbtxt")
+            ):
+                content = blob.download_as_bytes().decode("utf-8")
+                content = re.sub(
+                    "(?<=count: )[0-9]", str(expt.instances), content
+                )
+                blob.upload_from_string(
+                    content.encode("utf-8"),
+                    content_type="application/octet-stream"
+                )

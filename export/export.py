@@ -69,9 +69,10 @@ def main(
     base_name: typing.Optional[str] = None,
     kernel_stride: float = 0.002,
     fs: float = 4000,
-    kernel_size: float = 1.0
+    kernel_size: float = 1.0,
+    repo_dir: str = "/repo"
 ):
-    repo = ModelRepository("/repo")
+    repo = ModelRepository(repo_dir)
     snapshot_size = int(fs*kernel_size)
     base_name = base_name + "_" if base_name is not None else ""
 
@@ -99,7 +100,7 @@ def main(
         # GPUs to leverage, and how much to parallelize model
         # execution on each GPU
         model.config.add_instance_group(
-            gpus=gpus, count=count
+            count=count,  # gpus=gpus, count=count
         )
 
         # 4: Export the current model architecture to the
@@ -124,7 +125,7 @@ def main(
         f"{base_name}postproc", platform=PlatformName.ONNX
     )
     pp_model.config.add_instance_group(
-        gpus=gpus, count=count
+        count=count  # , gpus=gpus
     )
     pp_model.export_version(
         postprocessor,
@@ -156,7 +157,7 @@ def main(
         f"{base_name}bbh", platform=PlatformName.ONNX
     )
     bbh_model.config.add_instance_group(
-        gpus=gpus, count=count
+        count=count,  # , gpus=gpus
     )
     bbh_model.export_version(
         bbh,
@@ -165,14 +166,16 @@ def main(
     )
 
     ensemble = repo.create_model(
-        f"{base_name}gwe2e", platform=PlatformName.ENSEMBLE)
+        f"{base_name}gwe2e", platform=PlatformName.ENSEMBLE
+    )
     ensemble.add_streaming_inputs(
         inputs=[
             deepcleans["h"].inputs["witness"],
             deepcleans["l"].inputs["witness"],
             pp_model.inputs["strain"]
         ],
-        stream_size=int(kernel_stride*fs),
+        stream_size=int(kernel_stride * fs),
+        name=f"{base_name}snapshotter"
     )
 
     for detector, model in deepcleans.items():

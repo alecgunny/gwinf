@@ -67,9 +67,8 @@ class Pipeline:
 
 def get_inference_stats(client):
     stats = defaultdict(lambda : defaultdict(dict))
-    for stat in client.get_inference_stats():
-        name = stat.name.upper()
-        for field, data in stat.inference_stats.ListFields():
+    for name, stat in client.get_inference_stats().items():
+        for field, data in stat.ListFields():
             if field.name == "fail":
                 continue
 

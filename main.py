@@ -1,23 +1,157 @@
 import os
-import time
+import typing
+
+import pandas as pd
 
 import cloud_utils as cloud
 from expt_configs import expts, kernel_strides
-# from export.export import main as export
+from export.export import main as export_models
+from client_benchmarking.client import main as run_experiment
+
+
+_PROJECT = "gunny-multi-instance-dev"
+
+
+def export_and_push(
+    manager: cloud.GKEClusterManager,
+    cluster: cloud.gke.Cluster,
+    repo: cloud.GCSModelRepo,
+    repo_dir: str,
+    keep: bool
+):
+    node_pool = cloud.container.NodePool(
+        name="converter-pool",
+        initial_node_count=1,
+        config=cloud.gke.t4_node_config(
+            vcpus=4, gpus=1, labels={"trtconverter": "true"}
+        )
+    )
+    with manager.manage_resource(node_pool, cluster, keep=keep) as node_pool:
+        # make sure NVIDIA drivers got installed
+        cluster.k8s_client.wait_for_daemon_set(name="nvidia-driver-installer")
+
+        # now deploy TRT conversion app
+        deploy_file = os.path.join("apps", "trt-conversion", "deploy.yaml")
+        with cloud.deploy_file(deploy_file, ignore_if_exists=True) as f:
+            cluster.deploy(f)
+        cluster.k8s_client.wait_for_deployment("trt-converter")
+        ip = cluster.k8s_client.wait_for_service("trt-converter")
+
+        for kernel_stride in kernel_strides:
+            export_models(
+                platform=f"trt_fp16:http://{ip}:5000/onnx",
+                gpus=1,
+                count=1,
+                base_name=f"kernel-stride-{kernel_stride:0.3f}",
+                kernel_stride=kernel_stride,
+                fs=4000,
+                kernel_size=1.0,
+                repo_dir=repo_dir
+            )
+    repo.export_repo(repo_dir, start_fresh=True, clear=True)
+
+
+def run_inference_experiments(
+    manager: cloud.GKEClusterManager,
+    cluster: cloud.gke.Cluster,
+    repo: cloud.GCSModelRepo,
+    vcpus_per_gpu: int = 16,
+    keep: bool = False,
+    experiment_interval: float = 10.0,
+):
+    # configure the server node pool
+    max_cpus = 4 * vcpus_per_gpu
+    node_pool = cloud.container.NodePool(
+        name="triton-t4-pool",
+        initial_node_count=1,
+        config=cloud.gke.t4_node_config(vcpus=max_cpus, gpus=4)
+    )
+
+    # spin up the node pool on the cluster
+    with manager.manage_resource(node_pool, cluster, keep=keep) as node_pool:
+        # make sure NVIDIA drivers got installed
+        cluster.k8s_client.wait_for_daemon_set(name="nvidia-driver-installer")
+
+        # set some values that we'll use to parse the deployment yaml
+        helm_dir = os.path.join("apps", "server", "gw-triton")
+        deploy_file = os.path.join(helm_dir, "templates", "deploy.yaml")
+        deploy_values = {
+            "_file": os.path.join(helm_dir, "values.yaml"),
+            "repo": "gs://" + repo.bucket_name,
+            "tritonTag": "20.11"
+        }
+
+        # iterate through our experiments and collect the results
+        results = []
+        current_instances, current_gpus = 0, 0
+        for expt in expts:
+            if current_instances != expt.instances or current_gpus != expt.gpus:
+                # since Triton can't dynamically detect changes
+                # to the instance group without explicit model
+                # control, the simplest thing to do will be to
+                # spin up a new server instance each time our
+                # configuration changes
+
+                # start by updating all the model configs if
+                # the instances-per-gpu have changed
+                if current_instances != expt.instances:
+                    repo.update_model_configs_for_expt(expt)
+
+                # now spin down the old deployment
+                cluster.remove_deployment("tritonserver")
+
+                # now add the new configuration details to our
+                # yaml parsing values map
+                num_cpus = min(vcpus_per_gpu * expt.gpus, max_cpus - 1)
+                deploy_values.update({"numGPUs": expt.gpus, "cpu": num_cpus})
+
+                # deploy this new yaml onto the cluster
+                with cloud.deploy_file(
+                    deploy_file, values=deploy_values, ignore_if_exists=True
+                ) as f:
+                    cluster.deploy(f)
+
+                # wait for it to be ready
+                cluster.k8s_client.wait_for_deployment("tritonserver")
+                ip = cluster.k8s_client.wait_for_service("tritonserver")
+
+                current_instances = expt.instances
+                current_gpus = expt.gpus
+
+            df = run_experiment(
+                url=f"{ip}:8001",
+                model_name=f"kernel-stride-{expt.kernel_stride:0.3f}_gwe2e",
+                model_version=1,
+                sequence_id=1001,  # TODO: this will need to be random for real
+                kernel_stride=expt.kernel_stride,
+                use_dummy=True,
+                num_iterations=int(experiment_interval / expt.kernel_stride)
+            )
+            df["model"] = df["model"].str.split("_", expand=True)[1]
+            df["kernel_stride"] = expt.kernel_stride
+            df["instances"] = expt.instances
+            df["gpus"] = expt.gpus
+            results.append(df)
+
+    results = pd.concat(results, axis=0, ignore_index=True)
+    results.to_csv("results.csv", index=False)
+    return results
 
 
 def main(
-    cluster_name,
-    service_account_key_file,
-    zone="us-west1-b",
-    export=False,
-    keep=False
+    cluster_name: str,
+    service_account_key_file: str,
+    repo_dir: str = "repo",
+    repo_bucket: typing.Optional[str] = None,
+    zone: str = "us-west1-b",
+    export: bool = False,
+    keep: bool = False
 ):
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = service_account_key_file
     manager = cloud.GKEClusterManager(
-        service_account_key_file,
-        "gunny-multi-instance-dev",
-        zone
+        service_account_key_file, _PROJECT, zone
+    )
+    repo = cloud.GCSModelRepo(
+        repo_bucket or cluster_name + "_model-repo", service_account_key_file
     )
 
     cluster = cloud.container.Cluster(
@@ -28,60 +162,25 @@ def main(
             config=cloud.container.NodeConfig()
         )]
     )
+
     with manager.manage_resource(cluster, keep=keep) as cluster:
-        # build a kubernetes client capable of communicating
-        # with the new cluster
-        k8s_app_client = cloud.make_k8s_app_client(cluster)
+        # deploy GPU drivers daemonset on to cluster
+        with cloud.deploy_file(
+            "nvidia-driver-installer/cos/daemonset-preloaded.yaml",
+            repo="GoogleCloudPlatform/container-engine-accelerators",
+            branch="master",
+            ignore_if_exists=True
+        ) as f:
+            cluster.deploy(f)
+
         if export:
             # build a node pool for deploying our TRT conversion app
-            node_pool = cloud.container.NodePool(
-                name="converter-pool",
-                initial_node_count=1,
-                config=cloud.t4_node_config(vcpus=4, gpus=1)
-            )
-            with manager.manage_resource(
-                node_pool, cluster, keep=keep
-            ) as node_pool:
-                # deploy GPU drivers onto node pool
-                response = cloud.create_deployment_from_yaml(
-                    k8s_app_client,
-                    "nvidia-driver-installer/cos/daemonset-preloaded.yaml",
-                    repo="GoogleCloudPlatform/container-engine-accelerators",
-                    branch="master",
-                    ignore_if_exists=True
-                )
-                # TODO: do a real wait here
-                time.sleep(10)
+            export_and_push(manager, cluster, repo, repo_dir, keep)
 
-                # now deploy TRT conversion app
-                response = cloud.create_deployment_from_yaml(
-                    k8s_app_client,
-                    "deployment.yaml",
-                    repo="alecgunny/trt-converter-app",
-                    branch="main",
-                    wait=True,
-                    ignore_if_exists=True
-                )
-
-                # expose it via loadbalancer
-                ip = cloud.create_service_from_yaml(
-                    k8s_app_client,
-                    "converter-service.yaml",
-                    wait=True,
-                    ignore_if_exists=True
-                )
-
-                # url = "..."
-                # for kernel_stride in kernel_strides:
-                #     export(
-                #         platform=f"trt_fp16:http://{ip}:5000",
-                #         gpus=1,
-                #         count=1,
-                #         base_name=f"kernel-stride-{kernel_stride:0.3f}",
-                #         kernel_stride=kernel_stride,
-                #         fs=4000,
-                #         kernel_size=1.0
-                #     )
+        results = run_inference_experiments(
+            manager, cluster, repo, vcpus_per_gpu=16, keep=True
+        )
+        print(results)
     return manager
 
 
@@ -106,5 +205,18 @@ if __name__ == "__main__":
         "--keep",
         action="store_true",
     )
+    parser.add_argument(
+        "--repo-dir",
+        type=str,
+        default="repo"
+    )
     flags = parser.parse_args()
+
+    if not os.path.exists(flags.repo_dir):
+        print(f"Making model repo directory {flags.repo_dir}")
+        os.makedirs(flags.repo_dir)
+    elif len(os.listdir(flags.repo_dir)) > 0 and flags.export:
+        print(f"Model repo director {flags.repo_dir} not empty")
+        cloud.utils.clear_repo(flags.repo_dir)
+
     manager = main(**vars(flags))

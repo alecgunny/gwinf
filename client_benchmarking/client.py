@@ -2,9 +2,11 @@ import time
 import typing
 from collections import defaultdict
 
-from tritonclient import grpc as triton
+import pandas as pd
 from stillwater.client import StreamingInferenceClient
 
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))
 from utils import get_inference_stats, log, parse_args, Pipeline
 
 
@@ -35,14 +37,16 @@ def main(
     # do imports here in case you don't have gwpy
     if use_dummy:
         from stillwater.data_generator import DummyDataGenerator
+
         def _get_data_gen(name):
             return DummyDataGenerator(
-                (client.inputs[name].shape()[1], int(kernel_stride*4000)),
+                client.inputs[name].shape()[1:],
                 name,
                 sample_rate=4000
             )
     else:
         from stillwater.data_generator import LowLatencyFrameGenerator
+
         def _get_data_gen(name):
             return LowLatencyFrameGenerator(
                 data_dirs[name],
@@ -58,6 +62,7 @@ def main(
         data_gen = _get_data_gen(input_name)
         if not use_dummy:
             t0 = data_gen._generator_fn.t0
+
         client.add_parent(data_gen)
         processes.append(data_gen)
 
@@ -71,7 +76,7 @@ def main(
         for i in range(num_warm_ups):
             package = pipeline.get(timeout=1)
             if package is None:
-                time.sleep(0.1)
+                time.sleep(0.5)
                 continue
             packages_recvd += 1
 
@@ -106,14 +111,22 @@ def main(
 
     # report on how individual models in the ensemble did
     final_server_stats = get_inference_stats(client)
+    data = defaultdict(list)
     for model, fields in final_server_stats.items():
         for field, stats in fields.items():
             init_stats = initial_server_stats[model][field]
             total_time = stats["ns"] - init_stats["ns"]
             total_count = stats["count"] - init_stats["count"]
-            average_time = int(total_time / total_count / 100)
+            average_time = int(total_time / total_count / 1000)
 
-            log.info(f"{model}\tAverage {field} time: {average_time} us")
+            data["model"].append(model)
+            data["process"].append(field)
+            data["time"].append(average_time)
+
+            # log.info(f"{model}\tAverage {field} time: {average_time} us")
+    df = pd.DataFrame(data)
+    df["throughput"] = throughput
+    return df
 
 
 if __name__ == "__main__":

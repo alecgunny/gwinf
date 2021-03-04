@@ -2,5 +2,5 @@
 	path = export/exportlib
 	url = https://github.com/alecgunny/exportlib.git
 [submodule "stillwater"]
-	path = client/stillwater
+	path = client_benchmarking/stillwater
 	url = git@github.com:alecgunny/stillwater.git

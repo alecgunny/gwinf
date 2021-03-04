@@ -4,3 +4,5 @@
 **/.cache/
 **/.bash_history
 **/__pycache__/
+**/repo/
+results.csv
