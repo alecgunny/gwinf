@@ -87,7 +87,7 @@ def main(
         initial_server_stats = get_inference_stats(client)
         average_latency, packages_recvd = 0, 0
         while packages_recvd < num_iterations:
-            package = pipeline.get(timeout=0.5)
+            package = pipeline.get(timeout=1)
             if package is None:
                 continue
 

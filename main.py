@@ -1,4 +1,5 @@
 import os
+import re
 import typing
 
 import pandas as pd
@@ -10,6 +11,26 @@ from client_benchmarking.client import main as run_experiment
 
 
 _PROJECT = "gunny-multi-instance-dev"
+CHANNELS, DATA_DIRS, FILE_PATTERNS = {}, {}, {}
+for input_name in os.listdir("channels"):
+    with open(os.path.join("channels", input_name), "r") as f:
+        input_name = input_name.replace(".", "/")
+        input_name = "kernel-stride-{:0.3f}_" + input_name
+        CHANNELS[input_name] = [i for i in f.read().split("\n") if i]
+
+    detector = re.search("[hl](?=.witness)", input_name)
+    if detector is None:
+        detector = "h"
+    else:
+        detector = detector.group(0)
+
+    detector = detector.upper()
+    DATA_DIRS[input_name] = f"/dev/shm/kafka/{detector}1_O2"
+    FILE_PATTERNS[input_name] = f"{detector}-{detector}1_O2_llhoft-{{}}-1.gwf"
+
+
+def format_for_expt(d, expt):
+    return {k.format(expt.kernel_stride): v for k, v in d.items()}
 
 
 def export_and_push(
@@ -78,7 +99,6 @@ def run_inference_experiments(
         deploy_values = {
             "_file": os.path.join(helm_dir, "values.yaml"),
             "repo": "gs://" + repo.bucket_name,
-            "tritonTag": "20.11"
         }
 
         # iterate through our experiments and collect the results
@@ -124,7 +144,9 @@ def run_inference_experiments(
                 model_version=1,
                 sequence_id=1001,  # TODO: this will need to be random for real
                 kernel_stride=expt.kernel_stride,
-                use_dummy=True,
+                channels=format_for_expt(CHANNELS, expt),
+                data_dirs=format_for_expt(DATA_DIRS, expt),
+                file_patterns=format_for_expt(FILE_PATTERNS, expt),
                 num_iterations=int(experiment_interval / expt.kernel_stride)
             )
             df["model"] = df["model"].str.split("_", expand=True)[1]
