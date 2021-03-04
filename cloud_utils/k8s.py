@@ -190,6 +190,7 @@ def deploy_file(
             yaml_content = f.read()
 
     values = values or {}
+    values = values.copy()
     try:
         # try to load in values from file
         values_file = values.pop("_file")

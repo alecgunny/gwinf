@@ -15,7 +15,9 @@ dependencies:
   - tblib
   - seaborn
   - attrs
+  - python-nds2-client
   - gwpy
+  - python-ldas-tools-framecpp
   - pip
   - pip:
     - -r requirements.txt

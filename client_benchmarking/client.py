@@ -87,7 +87,7 @@ def main(
         initial_server_stats = get_inference_stats(client)
         average_latency, packages_recvd = 0, 0
         while packages_recvd < num_iterations:
-            package = pipeline.get(timeout=0.1)
+            package = pipeline.get(timeout=0.5)
             if package is None:
                 continue
 
@@ -106,7 +106,7 @@ def main(
             print(msg, end="\r", flush=True)
             packages_recvd += 1
 
-    print("\r")
+    print("\n")
     log.info(msg)
 
     # report on how individual models in the ensemble did
