@@ -16,7 +16,7 @@ class Expt:
 
 
 # kernel_strides = [0.001, 0.002, 0.004, 0.1]
-kernel_strides = [0.002, 0.004, 0.01]
+kernel_strides = [0.004, 0.01]
 instances = [1, 2, 4]
 gpus = [1, 2, 4]
 

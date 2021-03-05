@@ -23,7 +23,7 @@ def main(
     file_patterns: typing.Optional[typing.Dict[str, str]] = None,
     use_dummy: bool = False,
     num_iterations: int = 10000,
-    num_warm_ups: int = 50
+    num_warm_ups: typing.Optional[int] = None
 ):
     client = StreamingInferenceClient(
         url=url,
@@ -72,23 +72,26 @@ def main(
         out_pipes[output.name()] = client.add_child(output.name())
 
     with utils.Pipeline(processes, out_pipes) as pipeline:
-        packages_recvd = 0
-        utils.log.info(f"Warming up for {num_warm_ups} batches")
-        for i in range(num_warm_ups):
-            package = pipeline.get(timeout=1)
-            if package is None:
-                time.sleep(0.5)
-                continue
-            packages_recvd += 1
+        # packages_recvd = 0
+        # utils.log.info(f"Warming up for {num_warm_ups} batches")
+        # for i in range(num_warm_ups):
+        #     package = pipeline.get(timeout=1)
+        #     if package is None:
+        #         time.sleep(0.5)
+        #         continue
+        #     packages_recvd += 1
 
-        if packages_recvd == 0:
-            raise RuntimeError("Nothing ever showed up!")
-        utils.log.info(f"Warmed up with {packages_recvd}")
+        # if packages_recvd == 0:
+        #     raise RuntimeError("Nothing ever showed up!")
+        # utils.log.info(f"Warmed up with {packages_recvd}")
 
-        pipeline.reset()
+        # pipeline.reset()
 
         initial_server_stats = utils.get_inference_stats(client)
-        metrics = defaltdict(utils.StreamingAverageStat)
+        metrics = defaultdict(utils.StreamingAverageStat)
+
+        num_iterations = num_warm_ups or num_iterations
+        packages_recvd = 0
         while packages_recvd < num_iterations:
             package = pipeline.get(timeout=1)
             for i in range(50):
@@ -104,13 +107,20 @@ def main(
             if package is None:
                 continue
 
-            msg = (
-                "Average latency: {} us, Average throughput: {} frames/s".format(
-                    int(metrics["latency"] * 10**6), metrics["throughput"]
+            if num_warm_ups is None:
+                msg = (
+                    "Average latency: {} us, "
+                    "Average throughput: {} frames/s".format(
+                        int(metrics["latency"].value * 10**6),
+                        metrics["throughput"]
+                    )
                 )
-            )
-            print(msg, end="\r", flush=True)
+                print(msg, end="\r", flush=True)
+
             packages_recvd += 1
+
+    if num_warm_ups is not None:
+        return
 
     print("\n")
     utils.log.info(msg)
@@ -132,9 +142,9 @@ def main(
             # log.info(f"{model}\tAverage {field} time: {average_time} us")
     df = pd.DataFrame(data)
     df["throughput"] = metrics["throughput"]
-    df["preproc"] = int(metrics["preproc"] * 10**6)
-    df["round_trip"] = int(metrics["round_trip"] * 10**6)
-    df["latency"] = int(metrics["latency"] * 10**6)
+    df["preproc"] = int(metrics["preproc"].value * 10**6)
+    df["round_trip"] = int(metrics["round_trip"].value * 10**6)
+    df["latency"] = int(metrics["latency"].value * 10**6)
     return df
 
 

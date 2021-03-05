@@ -1,6 +1,8 @@
 import os
 import re
+import time
 import typing
+from functools import partial
 
 import pandas as pd
 
@@ -33,6 +35,17 @@ def format_for_expt(d, expt):
     return {k.format(expt.kernel_stride): v for k, v in d.items()}
 
 
+def deploy_gpu_drivers(cluster):
+    # deploy GPU drivers daemonset on to cluster
+    with cloud.deploy_file(
+        "nvidia-driver-installer/cos/daemonset-preloaded.yaml",
+        repo="GoogleCloudPlatform/container-engine-accelerators",
+        branch="master",
+        ignore_if_exists=True
+    ) as f:
+        cluster.deploy(f)
+
+
 def export_and_push(
     manager: cloud.GKEClusterManager,
     cluster: cloud.gke.Cluster,
@@ -49,6 +62,7 @@ def export_and_push(
     )
     with manager.manage_resource(node_pool, cluster, keep=keep) as node_pool:
         # make sure NVIDIA drivers got installed
+        deploy_gpu_drivers(cluster)
         cluster.k8s_client.wait_for_daemon_set(name="nvidia-driver-installer")
 
         # now deploy TRT conversion app
@@ -91,6 +105,7 @@ def run_inference_experiments(
     # spin up the node pool on the cluster
     with manager.manage_resource(node_pool, cluster, keep=keep) as node_pool:
         # make sure NVIDIA drivers got installed
+        deploy_gpu_drivers(cluster)
         cluster.k8s_client.wait_for_daemon_set(name="nvidia-driver-installer")
 
         # set some values that we'll use to parse the deployment yaml
@@ -138,7 +153,7 @@ def run_inference_experiments(
                 current_instances = expt.instances
                 current_gpus = expt.gpus
 
-            df = run_experiment(
+            cmd = partial(run_experiment,
                 url=f"{ip}:8001",
                 model_name=f"kernel-stride-{expt.kernel_stride:0.3f}_gwe2e",
                 model_version=1,
@@ -146,7 +161,12 @@ def run_inference_experiments(
                 kernel_stride=expt.kernel_stride,
                 channels=format_for_expt(CHANNELS, expt),
                 data_dirs=format_for_expt(DATA_DIRS, expt),
-                file_patterns=format_for_expt(FILE_PATTERNS, expt),
+                file_patterns=format_for_expt(FILE_PATTERNS, expt)
+            )
+            cmd(num_warm_ups=50)
+            time.sleep(1)
+
+            df = cmd(
                 num_iterations=int(experiment_interval / expt.kernel_stride)
             )
             df["model"] = df["model"].str.split("_", n=1, expand=True)[1]
@@ -186,15 +206,6 @@ def main(
     )
 
     with manager.manage_resource(cluster, keep=keep) as cluster:
-        # deploy GPU drivers daemonset on to cluster
-        with cloud.deploy_file(
-            "nvidia-driver-installer/cos/daemonset-preloaded.yaml",
-            repo="GoogleCloudPlatform/container-engine-accelerators",
-            branch="master",
-            ignore_if_exists=True
-        ) as f:
-            cluster.deploy(f)
-
         if export:
             # build a node pool for deploying our TRT conversion app
             export_and_push(manager, cluster, repo, repo_dir, keep)
