@@ -149,7 +149,7 @@ def run_inference_experiments(
                 file_patterns=format_for_expt(FILE_PATTERNS, expt),
                 num_iterations=int(experiment_interval / expt.kernel_stride)
             )
-            df["model"] = df["model"].str.split("_", expand=True)[1]
+            df["model"] = df["model"].str.split("_", n=1, expand=True)[1]
             df["kernel_stride"] = expt.kernel_stride
             df["instances"] = expt.instances
             df["gpus"] = expt.gpus

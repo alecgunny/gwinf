@@ -1,5 +1,6 @@
 import argparse
 import logging
+import queue
 import time
 import typing
 from collections import defaultdict
@@ -54,6 +55,26 @@ class Pipeline:
             raise
         return package
 
+    def reset(self):
+        log.info("Pausing processes and clearing metric qs")
+        for process in self.processes:
+            process.pause()
+            while True:
+                try:
+                    process._metric_q.get_nowait()
+                except queue.Empty:
+                    break
+
+        log.info("Clearing out pipes")
+        for pipe in self.out_pipes.values():
+            while pipe.poll():
+                _ = pipe.recv()
+
+        log.info("Resetting and unpausing processes")
+        for process in self.processes:
+            process.reset()
+            process.unpause()
+
     def __enter__(self):
         for process in self.processes:
             if not process.is_alive() and process.exitcode is None:
@@ -63,6 +84,14 @@ class Pipeline:
 
     def __exit__(self, exc_type, exc_value, exc_tb):
         self.cleanup()
+
+
+class StreamingAverageStat:
+    value, n = 0, 0
+
+    def update(self, new_value):
+        self.n += 1
+        self.value += (new_value - self.value) / self.n
 
 
 def get_inference_stats(client):
