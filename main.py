@@ -1,8 +1,6 @@
 import os
 import re
-import time
 import typing
-from functools import partial
 
 import pandas as pd
 
@@ -153,7 +151,7 @@ def run_inference_experiments(
                 current_instances = expt.instances
                 current_gpus = expt.gpus
 
-            cmd = partial(run_experiment,
+            df = run_experiment(
                 url=f"{ip}:8001",
                 model_name=f"kernel-stride-{expt.kernel_stride:0.3f}_gwe2e",
                 model_version=1,
@@ -163,12 +161,7 @@ def run_inference_experiments(
                 data_dirs=format_for_expt(DATA_DIRS, expt),
                 file_patterns=format_for_expt(FILE_PATTERNS, expt)
             )
-            cmd(num_warm_ups=50)
-            time.sleep(1)
 
-            df = cmd(
-                num_iterations=int(experiment_interval / expt.kernel_stride)
-            )
             df["model"] = df["model"].str.split("_", n=1, expand=True)[1]
             df["kernel_stride"] = expt.kernel_stride
             df["instances"] = expt.instances

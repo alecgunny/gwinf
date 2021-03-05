@@ -72,25 +72,23 @@ def main(
         out_pipes[output.name()] = client.add_child(output.name())
 
     with utils.Pipeline(processes, out_pipes) as pipeline:
-        # packages_recvd = 0
-        # utils.log.info(f"Warming up for {num_warm_ups} batches")
-        # for i in range(num_warm_ups):
-        #     package = pipeline.get(timeout=1)
-        #     if package is None:
-        #         time.sleep(0.5)
-        #         continue
-        #     packages_recvd += 1
+        packages_recvd = 0
+        utils.log.info(f"Warming up for {num_warm_ups} batches")
+        for i in range(num_warm_ups):
+            package = pipeline.get(timeout=1)
+            if package is None:
+                time.sleep(0.5)
+                continue
+            packages_recvd += 1
 
-        # if packages_recvd == 0:
-        #     raise RuntimeError("Nothing ever showed up!")
-        # utils.log.info(f"Warmed up with {packages_recvd}")
+        if packages_recvd == 0:
+            raise RuntimeError("Nothing ever showed up!")
+        utils.log.info(f"Warmed up with {packages_recvd}")
 
-        # pipeline.reset()
+        pipeline.reset()
 
         initial_server_stats = utils.get_inference_stats(client)
         metrics = defaultdict(utils.StreamingAverageStat)
-
-        num_iterations = num_warm_ups or num_iterations
         packages_recvd = 0
         while packages_recvd < num_iterations:
             package = pipeline.get(timeout=1)

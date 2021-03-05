@@ -56,23 +56,34 @@ class Pipeline:
         return package
 
     def reset(self):
-        log.info("Pausing processes and clearing metric qs")
+        log.info("Pausing processes")
         for process in self.processes:
             process.pause()
-            while True:
-                try:
-                    process._metric_q.get_nowait()
-                except queue.Empty:
-                    break
 
         log.info("Clearing out pipes")
         for pipe in self.out_pipes.values():
             while pipe.poll():
                 _ = pipe.recv()
 
-        log.info("Resetting and unpausing processes")
+        log.info(
+            "Resetting, clearing metric qs and unpausing processes"
+        )
+        t0 = None
         for process in self.processes:
             process.reset()
+            try:
+                if t0 is not None:
+                    process._generator_fn.t0 = t0
+                else:
+                    t0 = process._generator_fn.t0
+            except AttributeError:
+                pass
+
+            while True:
+                try:
+                    process._metric_q.get_nowait()
+                except queue.Empty:
+                    break
             process.unpause()
 
     def __enter__(self):
