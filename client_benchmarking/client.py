@@ -72,20 +72,20 @@ def main(
         out_pipes[output.name()] = client.add_child(output.name())
 
     with utils.Pipeline(processes, out_pipes) as pipeline:
-#         packages_recvd = 0
-#         utils.log.info(f"Warming up for {num_warm_ups} batches")
-#         for i in range(num_warm_ups):
-#             package = pipeline.get(timeout=1)
-#             if package is None:
-#                 time.sleep(0.5)
-#                 continue
-#             packages_recvd += 1
-# 
-#         if packages_recvd == 0:
-#             raise RuntimeError("Nothing ever showed up!")
-#         utils.log.info(f"Warmed up with {packages_recvd}")
-# 
-#         pipeline.reset()
+        # packages_recvd = 0
+        # utils.log.info(f"Warming up for {num_warm_ups} batches")
+        # for i in range(num_warm_ups):
+        #     package = pipeline.get(timeout=1)
+        #     if package is None:
+        #         time.sleep(0.5)
+        #         continue
+        #     packages_recvd += 1
+
+        # if packages_recvd == 0:
+        #     raise RuntimeError("Nothing ever showed up!")
+        # utils.log.info(f"Warmed up with {packages_recvd}")
+
+        # pipeline.reset()
 
         initial_server_stats = utils.get_inference_stats(client)
         metrics = defaultdict(utils.StreamingAverageStat)
@@ -102,7 +102,7 @@ def main(
                     metric_name, value = client._metric_q.get_nowait()
                 except queue.Empty:
                     break
-                if metric_name == "throughput":
+                if metric_name in ["throughput", "request_rate"]:
                     metrics[metric_name] = value
                 else:
                     metrics[metric_name].update(value)
@@ -142,8 +142,10 @@ def main(
             data["time (us)"].append(average_time)
 
             # log.info(f"{model}\tAverage {field} time: {average_time} us")
+
     df = pd.DataFrame(data)
     df["throughput"] = metrics["throughput"]
+    df["request_rate"] = metrics["request_rate"]
     df["preproc"] = int(metrics["preproc"].value * 10**6)
     df["round_trip"] = int(metrics["round_trip"].value * 10**6)
     df["latency"] = int(metrics["latency"].value * 10**6)
