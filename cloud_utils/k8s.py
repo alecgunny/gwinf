@@ -230,27 +230,17 @@ def deploy_file(
     try:
         try:
             yield file
-        except Exception as e:
+        except kubernetes.utils.FailToCreateError as e:
             if not ignore_if_exists:
                 # doesn't matter what the issue was,
                 # delete the temp files and raise
                 raise
 
-            try:
-                # see if the exception included some yaml
-                # formatted information about what went wrong
-                info = str(e).split("(Conflict): ")[1]
-                info = yaml.safe_load(info)
-            except Exception:
-                # expected formatting was different, raise
-                # the initial error
-                raise e
-
-            if info["reason"] != "AlreadyExists":
-                # if the reason was anything other
-                # than that the objects in question
-                # already exist, raise it
-                raise
+            # try to load api exception information
+            for exc in e.api_exceptions:
+                info = yaml.safe_load(exc.body)
+                if info["reason"] != "AlreadyExists":
+                    raise
     finally:
         # remove the temporary file no matter
         # what happens

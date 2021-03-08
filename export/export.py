@@ -184,7 +184,7 @@ def main(
             pp_model.inputs[f"noise_{detector}"],
             name=f"noise_{detector}"
         )
-        ensemble.add_output(model.outputs["noise"], name=f"noise_{detector}")
+        # ensemble.add_output(model.outputs["noise"], name=f"noise_{detector}")
     ensemble.pipe(
         pp_model.outputs["cleaned"],
         bbh_model.inputs["strain"]

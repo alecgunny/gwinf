@@ -8,6 +8,7 @@ from collections import defaultdict
 import attr
 
 from stillwater import sync_recv
+from stillwater.data_generator import LowLatencyFrameGenerator
 
 if typing.TYPE_CHECKING:
     from multiprocessing import Process
@@ -70,21 +71,31 @@ class Pipeline:
         )
         t0 = None
         for process in self.processes:
-            process.reset()
-            try:
-                if t0 is not None:
-                    process._generator_fn.t0 = t0
-                else:
-                    t0 = process._generator_fn.t0
-            except AttributeError:
-                pass
+            log.info(f"Resetting process {process.name}")
+            if isinstance(process, LowLatencyFrameGenerator):
+                process._in_q.put(("reset", {"t0": t0}))
+                process._in_q.join()
+
+                while True:
+                    try:
+                        t0 = process._in_q.get_nowait()
+                        process._in_q.task_done()
+                        log.info(f"Process {process.name} t0 now {t0}")
+                        break
+                    except queue.Empty:
+                        continue
+            else:
+                process._in_q.put("reset")
+                process._in_q.join()
 
             while True:
                 try:
-                    process._metric_q.get_nowait()
+                    _ = process._metric_q.get_nowait()
                 except queue.Empty:
                     break
-            process.unpause()
+
+            log.info(f"Unpausing process {process.name}")
+            process.resume()
 
     def __enter__(self):
         for process in self.processes:

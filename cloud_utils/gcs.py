@@ -69,6 +69,7 @@ class GCSModelRepo:
             if (
                 blob.name.startswith(f"kernel-stride-{expt.kernel_stride:0.3f}")
                 and blob.name.endswith(".pbtxt")
+                and "snapshotter" not in blob.name
             ):
                 content = blob.download_as_bytes().decode("utf-8")
                 blob_name = blob.name

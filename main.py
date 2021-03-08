@@ -151,16 +151,19 @@ def run_inference_experiments(
                 current_instances = expt.instances
                 current_gpus = expt.gpus
 
-            df = run_experiment(
-                url=f"{ip}:8001",
-                model_name=f"kernel-stride-{expt.kernel_stride:0.3f}_gwe2e",
-                model_version=1,
-                sequence_id=1001,  # TODO: this will need to be random for real
-                kernel_stride=expt.kernel_stride,
-                channels=format_for_expt(CHANNELS, expt),
-                data_dirs=format_for_expt(DATA_DIRS, expt),
-                file_patterns=format_for_expt(FILE_PATTERNS, expt)
-            )
+            for n in [10, int(experiment_interval / expt.kernel_stride)]:
+                df = run_experiment(
+                    url=f"{ip}:8001",
+                    model_name=f"kernel-stride-{expt.kernel_stride:0.3f}_gwe2e",
+                    model_version=1,
+                    sequence_id=1001,  # TODO: this will need to be random for real
+                    kernel_stride=expt.kernel_stride,
+                    channels=format_for_expt(CHANNELS, expt),
+                    data_dirs=format_for_expt(DATA_DIRS, expt),
+                    file_patterns=format_for_expt(FILE_PATTERNS, expt),
+                    num_warm_ups=50,
+                    num_iterations=n,
+                )
 
             df["model"] = df["model"].str.split("_", n=1, expand=True)[1]
             df["kernel_stride"] = expt.kernel_stride
