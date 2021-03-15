@@ -85,10 +85,11 @@ class K8sApiClient:
                 raise RuntimeError(
                     f"Deployment {name} no longer exists!"
                 )
+            conditions = response.status.conditions
+            if conditions is None:
+                return False
+            statuses = {i.type: eval(i.status) for i in conditions}
 
-            statuses = {
-                i.type: eval(i.status) for i in response.status.conditions
-            }
             try:
                 if statuses["Available"]:
                     return True

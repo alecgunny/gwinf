@@ -15,7 +15,7 @@ CHANNELS, DATA_DIRS, FILE_PATTERNS = {}, {}, {}
 for input_name in os.listdir("channels"):
     with open(os.path.join("channels", input_name), "r") as f:
         input_name = input_name.replace(".", "/")
-        input_name = "kernel-stride-{:0.3f}_" + input_name
+        input_name = "kernel-stride-{:0.4f}_" + input_name
         CHANNELS[input_name] = [i for i in f.read().split("\n") if i]
 
     detector = re.search("[hl](?=.witness)", input_name)
@@ -75,7 +75,7 @@ def export_and_push(
                 platform=f"trt_fp16:http://{ip}:5000/onnx",
                 gpus=1,
                 count=1,
-                base_name=f"kernel-stride-{kernel_stride:0.3f}",
+                base_name=f"kernel-stride-{kernel_stride:0.4f}",
                 kernel_stride=kernel_stride,
                 fs=4000,
                 kernel_size=1.0,
@@ -90,7 +90,7 @@ def run_inference_experiments(
     repo: cloud.GCSModelRepo,
     vcpus_per_gpu: int = 16,
     keep: bool = False,
-    experiment_interval: float = 10.0,
+    experiment_interval: float = 40.0,
 ):
     # configure the server node pool
     max_cpus = 4 * vcpus_per_gpu
@@ -154,7 +154,7 @@ def run_inference_experiments(
             for n in [10, int(experiment_interval / expt.kernel_stride)]:
                 df = run_experiment(
                     url=f"{ip}:8001",
-                    model_name=f"kernel-stride-{expt.kernel_stride:0.3f}_gwe2e",
+                    model_name=f"kernel-stride-{expt.kernel_stride:0.4f}_gwe2e",
                     model_version=1,
                     sequence_id=1001,  # TODO: this will need to be random for real
                     kernel_stride=expt.kernel_stride,
@@ -169,6 +169,8 @@ def run_inference_experiments(
             df["kernel_stride"] = expt.kernel_stride
             df["instances"] = expt.instances
             df["gpus"] = expt.gpus
+            print(df)
+
             results.append(df)
 
     results = pd.concat(results, axis=0, ignore_index=True)

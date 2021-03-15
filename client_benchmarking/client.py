@@ -30,7 +30,8 @@ def main(
         model_name=model_name,
         model_version=model_version,
         name="client",
-        sequence_id=sequence_id
+        sequence_id=sequence_id,
+        qps_limit=1000
     )
     processes = [client]
     t0 = None
@@ -96,7 +97,15 @@ def main(
         )
         last_package_time = time.time()
         while packages_recvd < num_iterations:
-            package = pipeline.get(timeout=5)
+            try:
+                package = pipeline.get(timeout=5)
+            except RuntimeError as e:
+                if str(e).startswith("Server"):
+                    msg = str(e).split(": ", maxsplit=1)[1]
+                    utils.log.warning(f"Encountered server error {msg}")
+                    utils.log.warning(f"Breaking after {packages_recvd} steps")
+                    break
+
             for i in range(50):
                 try:
                     metric_name, value = client._metric_q.get_nowait()
@@ -108,8 +117,11 @@ def main(
                     metrics[metric_name].update(value)
 
             if package is None:
-                if time.time() - last_package_time > 10:
-                    raise RuntimeError("Timeout")
+                if time.time() - last_package_time > 20:
+                    utils.log.warning(
+                        f"Timed out, breaking after {packages_recvd} steps"
+                    )
+                    break
                 continue
             last_package_time = time.time()
 
@@ -121,7 +133,6 @@ def main(
                 )
             )
             print(msg, end="\r", flush=True)
-
             packages_recvd += 1
 
     print("\n")
@@ -134,7 +145,7 @@ def main(
         for field, stats in fields.items():
             init_stats = initial_server_stats[model][field]
             total_time = stats["ns"] - init_stats["ns"]
-            total_count = stats["count"] - init_stats["count"]
+            total_count = max(1, stats["count"] - init_stats["count"])
             average_time = int(total_time / total_count / 1000)
 
             data["model"].append(model)
@@ -149,7 +160,7 @@ def main(
     df["preproc"] = int(metrics["preproc"].value * 10**6)
     df["round_trip"] = int(metrics["round_trip"].value * 10**6)
     df["latency"] = int(metrics["latency"].value * 10**6)
-    print(df)
+    df["packages"] = packages_recvd
     return df
 
 

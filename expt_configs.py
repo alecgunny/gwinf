@@ -15,8 +15,7 @@ class Expt:
         return "-".join(attrs)
 
 
-# kernel_strides = [0.001, 0.002, 0.004, 0.1]
-kernel_strides = [0.004, 0.01]
+kernel_strides = [0.0015, 0.002, 0.003, 0.004, 0.005, 0.008, 0.01]
 instances = [1, 2, 4]
 gpus = [1, 2, 4]
 
